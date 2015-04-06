@@ -1,0 +1,542 @@
+// Copyright (c) 2013, 2015 Conformal Systems LLC <info@conformal.com>
+//
+// Permission to use, copy, modify, and distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+package wtxmgr_test
+
+import (
+	"bytes"
+	"encoding/hex"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
+	"github.com/btcsuite/btcwallet/walletdb"
+	_ "github.com/btcsuite/btcwallet/walletdb/bdb"
+	. "github.com/btcsuite/btcwallet/wtxmgr"
+)
+
+// Received transaction output for mainnet outpoint
+// 61d3696de4c888730cbe06b0ad8ecb6d72d6108e893895aa9bc067bd7eba3fad:0
+var (
+	TstRecvSerializedTx, _          = hex.DecodeString("010000000114d9ff358894c486b4ae11c2a8cf7851b1df64c53d2e511278eff17c22fb7373000000008c493046022100995447baec31ee9f6d4ec0e05cb2a44f6b817a99d5f6de167d1c75354a946410022100c9ffc23b64d770b0e01e7ff4d25fbc2f1ca8091053078a247905c39fce3760b601410458b8e267add3c1e374cf40f1de02b59213a82e1d84c2b94096e22e2f09387009c96debe1d0bcb2356ffdcf65d2a83d4b34e72c62eccd8490dbf2110167783b2bffffffff0280969800000000001976a914479ed307831d0ac19ebc5f63de7d5f1a430ddb9d88ac38bfaa00000000001976a914dadf9e3484f28b385ddeaa6c575c0c0d18e9788a88ac00000000")
+	TstRecvTx, _                    = btcutil.NewTxFromBytes(TstRecvSerializedTx)
+	TstRecvTxSpendingTxBlockHash, _ = wire.NewShaHashFromStr("00000000000000017188b968a371bab95aa43522665353b646e41865abae02a4")
+	TstRecvAmt                      = int64(10000000)
+	TstRecvTxBlockDetails           = &BlockMeta{
+		Block: Block{Hash: *TstRecvTxSpendingTxBlockHash, Height: 276425},
+		Time:  time.Unix(1387737310, 0),
+	}
+
+	TstRecvCurrentHeight = int32(284498) // mainnet blockchain height at time of writing
+	TstRecvTxOutConfirms = 8074          // hardcoded number of confirmations given the above block height
+
+	TstSpendingSerializedTx, _ = hex.DecodeString("0100000003ad3fba7ebd67c09baa9538898e10d6726dcb8eadb006be0c7388c8e46d69d361000000006b4830450220702c4fbde5532575fed44f8d6e8c3432a2a9bd8cff2f966c3a79b2245a7c88db02210095d6505a57e350720cb52b89a9b56243c15ddfcea0596aedc1ba55d9fb7d5aa0012103cccb5c48a699d3efcca6dae277fee6b82e0229ed754b742659c3acdfed2651f9ffffffffdbd36173f5610e34de5c00ed092174603761595d90190f790e79cda3e5b45bc2010000006b483045022000fa20735e5875e64d05bed43d81b867f3bd8745008d3ff4331ef1617eac7c44022100ad82261fc57faac67fc482a37b6bf18158da0971e300abf5fe2f9fd39e107f58012102d4e1caf3e022757512c204bf09ff56a9981df483aba3c74bb60d3612077c9206ffffffff65536c9d964b6f89b8ef17e83c6666641bc495cb27bab60052f76cd4556ccd0d040000006a473044022068e3886e0299ffa69a1c3ee40f8b6700f5f6d463a9cf9dbf22c055a131fc4abc02202b58957fe19ff1be7a84c458d08016c53fbddec7184ac5e633f2b282ae3420ae012103b4e411b81d32a69fb81178a8ea1abaa12f613336923ee920ffbb1b313af1f4d2ffffffff02ab233200000000001976a91418808b2fbd8d2c6d022aed5cd61f0ce6c0a4cbb688ac4741f011000000001976a914f081088a300c80ce36b717a9914ab5ec8a7d283988ac00000000")
+	TstSpendingTx, _           = btcutil.NewTxFromBytes(TstSpendingSerializedTx)
+	TstSpendingTxBlockHeight   = int32(279143)
+	TstSignedTxBlockHash, _    = wire.NewShaHashFromStr("00000000000000017188b968a371bab95aa43522665353b646e41865abae02a4")
+	TstSignedTxBlockDetails    = &BlockMeta{
+		Block: Block{Hash: *TstSignedTxBlockHash, Height: TstSpendingTxBlockHeight},
+		Time:  time.Unix(1389114091, 0),
+	}
+	TstDbPath = "/tmp/testwallet.db"
+)
+
+func CreateTestStore() (*Store, error) {
+	db, err := walletdb.Create("bdb", TstDbPath)
+	if err != nil {
+		return nil, err
+	}
+	wtxmgrNamespace, err := db.Namespace([]byte("testtxstore"))
+	if err != nil {
+		return nil, err
+	}
+	s, err := Open(wtxmgrNamespace,
+		&chaincfg.MainNetParams)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func serializeTx(tx *btcutil.Tx) []byte {
+	var buf bytes.Buffer
+	err := tx.MsgTx().Serialize(&buf)
+	if err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func TestInsertsCreditsDebitsRollbacks(t *testing.T) {
+	// Create a double spend of the received blockchain transaction.
+	dupRecvTx, _ := btcutil.NewTxFromBytes(TstRecvSerializedTx)
+	// Switch txout amount to 1 BTC.  Transaction store doesn't
+	// validate txs, so this is fine for testing a double spend
+	// removal.
+	TstDupRecvAmount := int64(1e8)
+	newDupMsgTx := dupRecvTx.MsgTx()
+	newDupMsgTx.TxOut[0].Value = TstDupRecvAmount
+	TstDoubleSpendTx := btcutil.NewTx(newDupMsgTx)
+	TstDoubleSpendSerializedTx := serializeTx(TstDoubleSpendTx)
+
+	// Create a "signed" (with invalid sigs) tx that spends output 0 of
+	// the double spend.
+	spendingTx := wire.NewMsgTx()
+	spendingTxIn := wire.NewTxIn(wire.NewOutPoint(TstDoubleSpendTx.Sha(), 0), []byte{0, 1, 2, 3, 4})
+	spendingTx.AddTxIn(spendingTxIn)
+	spendingTxOut1 := wire.NewTxOut(1e7, []byte{5, 6, 7, 8, 9})
+	spendingTxOut2 := wire.NewTxOut(9e7, []byte{10, 11, 12, 13, 14})
+	spendingTx.AddTxOut(spendingTxOut1)
+	spendingTx.AddTxOut(spendingTxOut2)
+	TstSpendingTx := btcutil.NewTx(spendingTx)
+	TstSpendingSerializedTx := serializeTx(TstSpendingTx)
+	var _ = TstSpendingTx
+	defer os.Remove(TstDbPath)
+
+	tests := []struct {
+		name     string
+		f        func(*Store) (*Store, error)
+		bal, unc btcutil.Amount
+		unspents map[wire.OutPoint]struct{}
+		unmined  map[wire.ShaHash]struct{}
+	}{
+		{
+			name: "new store",
+			f: func(s *Store) (*Store, error) {
+				return CreateTestStore()
+			},
+			bal:      0,
+			unc:      0,
+			unspents: map[wire.OutPoint]struct{}{},
+			unmined:  map[wire.ShaHash]struct{}{},
+		},
+		{
+			name: "txout insert",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstRecvSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, nil)
+				if err != nil {
+					return nil, err
+				}
+
+				err = s.AddCredit(rec, nil, 0, false)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstRecvTx.MsgTx().TxOut[0].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstRecvTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstRecvTx.Sha(): {},
+			},
+		},
+		{
+			name: "insert duplicate unconfirmed",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstRecvSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, nil)
+				if err != nil {
+					return nil, err
+				}
+
+				err = s.AddCredit(rec, nil, 0, false)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstRecvTx.MsgTx().TxOut[0].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstRecvTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstRecvTx.Sha(): {},
+			},
+		},
+		{
+			name: "confirmed txout insert",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstRecvSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, TstRecvTxBlockDetails)
+				if err != nil {
+					return nil, err
+				}
+
+				err = s.AddCredit(rec, TstRecvTxBlockDetails, 0, false)
+				return s, err
+			},
+			bal: btcutil.Amount(TstRecvTx.MsgTx().TxOut[0].Value),
+			unc: 0,
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstRecvTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{},
+		},
+		{
+			name: "insert duplicate confirmed",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstRecvSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, TstRecvTxBlockDetails)
+				if err != nil {
+					return nil, err
+				}
+
+				err = s.AddCredit(rec, TstRecvTxBlockDetails, 0, false)
+				return s, err
+			},
+			bal: btcutil.Amount(TstRecvTx.MsgTx().TxOut[0].Value),
+			unc: 0,
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstRecvTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{},
+		},
+		{
+			name: "rollback confirmed credit",
+			f: func(s *Store) (*Store, error) {
+				err := s.Rollback(TstRecvTxBlockDetails.Height)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstRecvTx.MsgTx().TxOut[0].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstRecvTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstRecvTx.Sha(): {},
+			},
+		},
+		{
+			name: "insert confirmed double spend",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstDoubleSpendSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, TstRecvTxBlockDetails)
+				if err != nil {
+					return nil, err
+				}
+
+				err = s.AddCredit(rec, TstRecvTxBlockDetails, 0, false)
+				return s, err
+			},
+			bal: btcutil.Amount(TstDoubleSpendTx.MsgTx().TxOut[0].Value),
+			unc: 0,
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstDoubleSpendTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{},
+		},
+		{
+			name: "insert unconfirmed debit",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstSpendingSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, nil)
+				return s, err
+			},
+			bal:      0,
+			unc:      0,
+			unspents: map[wire.OutPoint]struct{}{},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstSpendingTx.Sha(): {},
+			},
+		},
+		{
+			name: "insert unconfirmed debit again",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstDoubleSpendSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, TstRecvTxBlockDetails)
+				return s, err
+			},
+			bal:      0,
+			unc:      0,
+			unspents: map[wire.OutPoint]struct{}{},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstSpendingTx.Sha(): {},
+			},
+		},
+		{
+			name: "insert change (index 0)",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstSpendingSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, nil)
+				if err != nil {
+					return nil, err
+				}
+
+				err = s.AddCredit(rec, nil, 0, true)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstSpendingTx.Sha(), 0}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstSpendingTx.Sha(): {},
+			},
+		},
+		{
+			name: "insert output back to this own wallet (index 1)",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstSpendingSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, nil)
+				if err != nil {
+					return nil, err
+				}
+				err = s.AddCredit(rec, nil, 1, true)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value + TstSpendingTx.MsgTx().TxOut[1].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstSpendingTx.Sha(), 0}: {},
+				wire.OutPoint{*TstSpendingTx.Sha(), 1}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstSpendingTx.Sha(): {},
+			},
+		},
+		{
+			name: "confirm signed tx",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstSpendingSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, TstSignedTxBlockDetails)
+				return s, err
+			},
+			bal: btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value + TstSpendingTx.MsgTx().TxOut[1].Value),
+			unc: 0,
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstSpendingTx.Sha(), 0}: {},
+				wire.OutPoint{*TstSpendingTx.Sha(), 1}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{},
+		},
+		{
+			name: "rollback after spending tx",
+			f: func(s *Store) (*Store, error) {
+				err := s.Rollback(TstSignedTxBlockDetails.Height + 1)
+				return s, err
+			},
+			bal: btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value + TstSpendingTx.MsgTx().TxOut[1].Value),
+			unc: 0,
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstSpendingTx.Sha(), 0}: {},
+				wire.OutPoint{*TstSpendingTx.Sha(), 1}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{},
+		},
+		{
+			name: "rollback spending tx block",
+			f: func(s *Store) (*Store, error) {
+				err := s.Rollback(TstSignedTxBlockDetails.Height)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value + TstSpendingTx.MsgTx().TxOut[1].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				wire.OutPoint{*TstSpendingTx.Sha(), 0}: {},
+				wire.OutPoint{*TstSpendingTx.Sha(), 1}: {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstSpendingTx.Sha(): {},
+			},
+		},
+		{
+			name: "rollback double spend tx block",
+			f: func(s *Store) (*Store, error) {
+				err := s.Rollback(TstRecvTxBlockDetails.Height)
+				return s, err
+			},
+			bal: 0,
+			unc: btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value + TstSpendingTx.MsgTx().TxOut[1].Value),
+			unspents: map[wire.OutPoint]struct{}{
+				*wire.NewOutPoint(TstSpendingTx.Sha(), 0): {},
+				*wire.NewOutPoint(TstSpendingTx.Sha(), 1): {},
+			},
+			unmined: map[wire.ShaHash]struct{}{
+				*TstDoubleSpendTx.Sha(): {},
+				*TstSpendingTx.Sha():    {},
+			},
+		},
+		{
+			name: "insert original recv txout",
+			f: func(s *Store) (*Store, error) {
+				rec, err := NewTxRecord(TstRecvSerializedTx, time.Now())
+				if err != nil {
+					return nil, err
+				}
+				err = s.InsertTx(rec, TstRecvTxBlockDetails)
+				if err != nil {
+					return nil, err
+				}
+				err = s.AddCredit(rec, TstRecvTxBlockDetails, 0, false)
+				return s, err
+			},
+			bal: btcutil.Amount(TstRecvTx.MsgTx().TxOut[0].Value),
+			unc: 0,
+			unspents: map[wire.OutPoint]struct{}{
+				*wire.NewOutPoint(TstRecvTx.Sha(), 0): {},
+			},
+			unmined: map[wire.ShaHash]struct{}{},
+		},
+	}
+
+	var s *Store
+	for _, test := range tests {
+		tmpStore, err := test.f(s)
+		if err != nil {
+			t.Fatalf("%s: got error: %v", test.name, err)
+		}
+		s = tmpStore
+		bal, err := s.Balance(1, TstRecvCurrentHeight)
+		if err != nil {
+			t.Fatalf("%s: Confirmed Balance failed: %v", test.name, err)
+		}
+		if bal != test.bal {
+			t.Fatalf("%s: balance mismatch: expected: %d, got: %d", test.name, test.bal, bal)
+		}
+		unc, err := s.Balance(0, TstRecvCurrentHeight)
+		if err != nil {
+			t.Fatalf("%s: Unconfirmed Balance failed: %v", test.name, err)
+		}
+		unc -= bal
+		if unc != test.unc {
+			t.Fatalf("%s: unconfirmed balance mismatch: expected %d, got %d", test.name, test.unc, unc)
+		}
+
+		// Check that unspent outputs match expected.
+		unspent, err := s.UnspentOutputs()
+		if err != nil {
+			t.Fatalf("%s: failed to fetch unspent outputs: %v", test.name, err)
+		}
+		for _, cred := range unspent {
+			if _, ok := test.unspents[cred.OutPoint]; !ok {
+				t.Errorf("%s: unexpected unspent output: %v", test.name, cred.OutPoint)
+			}
+			delete(test.unspents, cred.OutPoint)
+		}
+		if len(test.unspents) != 0 {
+			t.Fatalf("%s: missing expected unspent output(s)", test.name)
+		}
+
+		// Check that unmined txs match expected.
+		unmined, err := s.UnminedTxs()
+		if err != nil {
+			t.Fatalf("%s: cannot load unmined transactions: %v", test.name, err)
+		}
+		for _, tx := range unmined {
+			txHash, err := tx.TxSha()
+			if err != nil {
+				t.Fatalf("%s: cannot create transaction hash: %v", test.name, err)
+			}
+			if _, ok := test.unmined[txHash]; !ok {
+				t.Fatalf("%s: unexpected unmined tx: %v", test.name, txHash)
+			}
+			delete(test.unmined, txHash)
+		}
+		if len(test.unmined) != 0 {
+			t.Fatalf("%s: missing expected unmined tx(s)", test.name)
+		}
+
+	}
+}
+
+func TestFindingSpentCredits(t *testing.T) {
+	s, err := CreateTestStore()
+	defer os.Remove(TstDbPath)
+	if err != nil {
+		t.Fatalf("CreateTestStore: unexpected error: %v", err)
+	}
+
+	// Insert transaction and credit which will be spent.
+	recvRec, err := NewTxRecord(TstRecvSerializedTx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.InsertTx(recvRec, TstRecvTxBlockDetails)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(recvRec, TstRecvTxBlockDetails, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert confirmed transaction which spends the above credit.
+	spendingRec, err := NewTxRecord(TstSpendingSerializedTx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.InsertTx(spendingRec, TstSignedTxBlockDetails)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(spendingRec, TstSignedTxBlockDetails, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bal, err := s.Balance(1, TstSignedTxBlockDetails.Height)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedBal := btcutil.Amount(TstSpendingTx.MsgTx().TxOut[0].Value)
+	if bal != expectedBal {
+		t.Fatalf("bad balance: %v != %v", bal, expectedBal)
+	}
+	unspents, err := s.UnspentOutputs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := wire.NewOutPoint(TstSpendingTx.Sha(), 0)
+	if unspents[0].OutPoint != *op {
+		t.Fatal("unspent outpoint doesn't match expected")
+	}
+	if len(unspents) > 1 {
+		t.Fatal("has more than one unspent credit")
+	}
+}
