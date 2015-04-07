@@ -475,6 +475,15 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 		return err
 	}
 
+	// Keep track of all credits that were removed from coinbase
+	// transactions.  After detaching all blocks, if any transaction record
+	// exists in unmined that spends these outputs, remove them and their
+	// spend chains.
+	//
+	// It is necessary to keep these in memory and fix the unmined
+	// transactions later since blocks are removed in increasing order.
+	var coinBaseCredits map[wire.OutPoint]struct{}
+
 	it := makeBlockIterator(ns, height)
 	for it.next() {
 		b := &it.elem
@@ -511,6 +520,8 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 			// not moved to the unconfirmed store.  A coinbase cannot
 			// contain any debits, but all credits should be removed
 			// and the mined balance decremented.
+			//
+			//
 			if blockchain.IsCoinBaseTx(&rec.MsgTx) {
 				op := wire.OutPoint{Hash: rec.Hash}
 				for i, output := range rec.MsgTx.TxOut {
@@ -520,6 +531,12 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 						continue
 					}
 					op.Index = uint32(i)
+
+					if coinBaseCredits == nil {
+						coinBaseCredits = make(map[wire.OutPoint]struct{})
+					}
+					coinBaseCredits[op] = struct{}{}
+
 					unspentKey, credKey := existsUnspent(ns, &op)
 					if credKey != nil {
 						minedBalance -= btcutil.Amount(output.Value)
@@ -645,6 +662,27 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 	}
 	if it.err != nil {
 		return it.err
+	}
+
+	for op := range coinBaseCredits {
+		opKey := canonicalOutPoint(&op.Hash, op.Index)
+		unminedKey := existsRawUnminedInput(ns, opKey)
+		if unminedKey != nil {
+			unminedVal := existsRawUnmined(ns, unminedKey)
+			var unminedRec TxRecord
+			copy(unminedRec.Hash[:], unminedKey) // Silly but need an array
+			err = readRawTxRecord(&unminedRec.Hash, unminedVal, &unminedRec)
+			if err != nil {
+				return err
+			}
+
+			log.Debugf("Transaction %v spends a removed coinbase "+
+				"output -- removing as well", unminedRec.Hash)
+			err = s.removeConflict(ns, &unminedRec)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return putMinedBalance(ns, minedBalance)
@@ -884,7 +922,7 @@ func (s *Store) balance(ns walletdb.Bucket, minConf int32, syncHeight int32) (bt
 				}
 				confs := confirms(block.Height)
 				if confs < minConf || (blockchain.IsCoinBaseTx(&rec.MsgTx) &&
-					confs <= blockchain.CoinbaseMaturity) {
+					confs < blockchain.CoinbaseMaturity) {
 					bal -= amt
 				}
 			}
