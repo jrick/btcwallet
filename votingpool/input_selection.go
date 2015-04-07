@@ -22,14 +22,15 @@ import (
 	"sort"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcwallet/legacy/txstore"
+	"github.com/btcsuite/btcwallet/wtxmgr"
 )
 
 const eligibleInputMinConfirmations = 100
 
-// Credit is an abstraction over txstore.Credit used in the construction of
+// Credit is an abstraction over wtxmgr.Credit used in the construction of
 // voting pool withdrawal transactions.
 type Credit interface {
 	TxSha() *wire.ShaHash
@@ -37,33 +38,45 @@ type Credit interface {
 	Address() WithdrawalAddress
 	Amount() btcutil.Amount
 	OutPoint() *wire.OutPoint
-	TxOut() *wire.TxOut
+	PkScript() []byte
+	BlockHeight() int32
 }
 
 // credit implements the Credit interface.
 type credit struct {
-	txstore.Credit
+	wtxmgr.Credit
 	addr WithdrawalAddress
 }
 
-// newCredit initialises a new credit.
-func newCredit(c txstore.Credit, addr WithdrawalAddress) *credit {
+func newCredit(c wtxmgr.Credit, addr WithdrawalAddress) *credit {
 	return &credit{Credit: c, addr: addr}
 }
 
-func (c *credit) String() string {
-	return fmt.Sprintf("credit of %v to %v", c.Amount(), c.Address())
+func (c *credit) BlockHeight() int32 {
+	return c.Credit.BlockMeta.Height
+}
+
+func (c *credit) Amount() btcutil.Amount {
+	return c.Credit.Amount
+}
+
+func (c *credit) OutPoint() *wire.OutPoint {
+	return &c.Credit.OutPoint
 }
 
 // TxSha returns the sha hash of the underlying transaction.
 func (c *credit) TxSha() *wire.ShaHash {
-	return c.Credit.TxRecord.Tx().Sha()
+	return &c.Credit.OutPoint.Hash
+}
+
+func (c *credit) PkScript() []byte {
+	return c.Credit.PkScript
 }
 
 // OutputIndex returns the outputindex of the ouput in the underlying
 // transaction.
 func (c *credit) OutputIndex() uint32 {
-	return c.Credit.OutputIndex
+	return c.Credit.OutPoint.Index
 }
 
 // Address returns the voting pool address.
@@ -71,8 +84,9 @@ func (c *credit) Address() WithdrawalAddress {
 	return c.addr
 }
 
-// Compile time check that credit implements Credit interface.
-var _ Credit = (*credit)(nil)
+func (c *credit) String() string {
+	return fmt.Sprintf("credit of %v to %v", c.Amount(), c.Address())
+}
 
 // byAddress defines the methods needed to satisify sort.Interface to sort a
 // slice of Credits by their address.
@@ -127,7 +141,7 @@ func (c byAddress) Less(i, j int) bool {
 
 // getEligibleInputs returns eligible inputs with addresses between startAddress
 // and the last used address of lastSeriesID.
-func (p *Pool) getEligibleInputs(store *txstore.Store, startAddress WithdrawalAddress,
+func (p *Pool) getEligibleInputs(store *wtxmgr.Store, startAddress WithdrawalAddress,
 	lastSeriesID uint32, dustThreshold btcutil.Amount, chainHeight int32,
 	minConf int) ([]Credit, error) {
 
@@ -150,8 +164,9 @@ func (p *Pool) getEligibleInputs(store *txstore.Store, startAddress WithdrawalAd
 		if candidates, ok := addrMap[address.addr.EncodeAddress()]; ok {
 			var eligibles []Credit
 			for _, c := range candidates {
-				if p.isCreditEligible(c, minConf, chainHeight, dustThreshold) {
-					eligibles = append(eligibles, newCredit(c, address))
+				candidate := newCredit(c, address)
+				if p.isCreditEligible(candidate, minConf, chainHeight, dustThreshold) {
+					eligibles = append(eligibles, candidate)
 				}
 			}
 			// Make sure the eligibles are correctly sorted.
@@ -237,11 +252,11 @@ func (p *Pool) highestUsedSeriesIndex(seriesID uint32) (Index, error) {
 // groupCreditsByAddr converts a slice of credits to a map from the string
 // representation of an encoded address to the unspent outputs associated with
 // that address.
-func groupCreditsByAddr(credits []txstore.Credit, chainParams *chaincfg.Params) (
-	map[string][]txstore.Credit, error) {
-	addrMap := make(map[string][]txstore.Credit)
+func groupCreditsByAddr(credits []wtxmgr.Credit, chainParams *chaincfg.Params) (
+	map[string][]wtxmgr.Credit, error) {
+	addrMap := make(map[string][]wtxmgr.Credit)
 	for _, c := range credits {
-		_, addrs, _, err := c.Addresses(chainParams)
+		_, addrs, _, err := txscript.ExtractPkScriptAddrs(c.PkScript, chainParams)
 		if err != nil {
 			return nil, newError(ErrInputSelection, "failed to obtain input address", err)
 		}
@@ -255,7 +270,7 @@ func groupCreditsByAddr(credits []txstore.Credit, chainParams *chaincfg.Params) 
 		if v, ok := addrMap[encAddr]; ok {
 			addrMap[encAddr] = append(v, c)
 		} else {
-			addrMap[encAddr] = []txstore.Credit{c}
+			addrMap[encAddr] = []wtxmgr.Credit{c}
 		}
 	}
 
@@ -265,12 +280,12 @@ func groupCreditsByAddr(credits []txstore.Credit, chainParams *chaincfg.Params) 
 // isCreditEligible tests a given credit for eligibilty with respect
 // to number of confirmations, the dust threshold and that it is not
 // the charter output.
-func (p *Pool) isCreditEligible(c txstore.Credit, minConf int, chainHeight int32,
+func (p *Pool) isCreditEligible(c Credit, minConf int, chainHeight int32,
 	dustThreshold btcutil.Amount) bool {
 	if c.Amount() < dustThreshold {
 		return false
 	}
-	if !c.Confirmed(minConf, chainHeight) {
+	if confirms(c.BlockHeight(), chainHeight) < int32(minConf) {
 		return false
 	}
 	if p.isCharterOutput(c) {
@@ -282,6 +297,18 @@ func (p *Pool) isCreditEligible(c txstore.Credit, minConf int, chainHeight int32
 
 // isCharterOutput - TODO: In order to determine this, we need the txid
 // and the output index of the current charter output, which we don't have yet.
-func (p *Pool) isCharterOutput(c txstore.Credit) bool {
+func (p *Pool) isCharterOutput(c Credit) bool {
 	return false
+}
+
+// confirms returns the number of confirmations for a transaction in a block at
+// height txHeight (or -1 for an unconfirmed tx) given the chain height
+// curHeight.
+func confirms(txHeight, curHeight int32) int32 {
+	switch {
+	case txHeight == -1, txHeight > curHeight:
+		return 0
+	default:
+		return curHeight - txHeight + 1
+	}
 }

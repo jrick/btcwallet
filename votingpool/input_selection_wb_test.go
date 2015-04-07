@@ -24,7 +24,7 @@ import (
 
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcwallet/legacy/txstore"
+	"github.com/btcsuite/btcwallet/wtxmgr"
 )
 
 var (
@@ -48,10 +48,9 @@ func TestGetEligibleInputs(t *testing.T) {
 	// Create two eligible inputs locked to each of the PKScripts above.
 	expNoEligibleInputs := 2 * len(scripts)
 	eligibleAmounts := []int64{int64(dustThreshold + 1), int64(dustThreshold + 1)}
-	var inputs []txstore.Credit
+	var inputs []wtxmgr.Credit
 	for i := 0; i < len(scripts); i++ {
-		txIndex := int(i) + 1
-		created := TstCreateInputsOnBlock(t, store, txIndex, scripts[i], eligibleAmounts)
+		created := TstCreateCreditsOnStore(t, store, scripts[i], eligibleAmounts)
 		inputs = append(inputs, created...)
 	}
 
@@ -213,23 +212,14 @@ func TestNextAddr(t *testing.T) {
 }
 
 func TestEligibleInputsAreEligible(t *testing.T) {
-	tearDown, pool, store := TstCreatePoolAndTxStore(t)
+	tearDown, pool, _ := TstCreatePoolAndTxStore(t)
 	defer tearDown()
-	seriesID := uint32(1)
-	branch := Branch(0)
-	index := Index(0)
 
-	// create the series
-	series := []TstSeriesDef{{ReqSigs: 3, PubKeys: TstPubKeys[1:6], SeriesID: seriesID}}
-	TstCreateSeries(t, pool, series)
-
-	// Create the input.
-	pkScript := TstCreatePkScript(t, pool, seriesID, branch, index)
 	var chainHeight int32 = 1000
-	c := TstCreateInputs(t, store, pkScript, []int64{int64(dustThreshold)})[0]
-
-	// Make sure credits is old enough to pass the minConf check.
-	c.BlockHeight = int32(eligibleInputMinConfirmations)
+	_, credits := TstCreateCreditsOnNewSeries(t, pool, []int64{int64(dustThreshold)})
+	c := credits[0].(*credit)
+	// Make sure credit is old enough to pass the minConf check.
+	c.Credit.BlockMeta.Height = int32(eligibleInputMinConfirmations)
 
 	if !pool.isCreditEligible(c, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
 		t.Errorf("Input is not eligible and it should be.")
@@ -237,36 +227,28 @@ func TestEligibleInputsAreEligible(t *testing.T) {
 }
 
 func TestNonEligibleInputsAreNotEligible(t *testing.T) {
-	tearDown, pool, store1 := TstCreatePoolAndTxStore(t)
-	store2, storeTearDown2 := TstCreateTxStore(t)
+	tearDown, pool, _ := TstCreatePoolAndTxStore(t)
 	defer tearDown()
-	defer storeTearDown2()
-	seriesID := uint32(1)
-	branch := Branch(0)
-	index := Index(0)
 
-	// create the series
-	series := []TstSeriesDef{{ReqSigs: 3, PubKeys: TstPubKeys[1:6], SeriesID: seriesID}}
-	TstCreateSeries(t, pool, series)
-
-	pkScript := TstCreatePkScript(t, pool, seriesID, branch, index)
 	var chainHeight int32 = 1000
+	_, credits := TstCreateCreditsOnNewSeries(t, pool, []int64{int64(dustThreshold - 1)})
+	c := credits[0].(*credit)
+	// Make sure credit is old enough to pass the minConf check.
+	c.Credit.BlockMeta.Height = int32(eligibleInputMinConfirmations)
 
 	// Check that credit below dustThreshold is rejected.
-	c1 := TstCreateInputs(t, store1, pkScript, []int64{int64(dustThreshold - 1)})[0]
-	c1.BlockHeight = int32(100) // make sure it has enough confirmations.
-	if pool.isCreditEligible(c1, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
+	if pool.isCreditEligible(c, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
 		t.Errorf("Input is eligible and it should not be.")
 	}
 
 	// Check that a credit with not enough confirmations is rejected.
-	c2 := TstCreateInputs(t, store2, pkScript, []int64{int64(dustThreshold)})[0]
-	// the calculation of if it has been confirmed does this:
-	// chainheigt - bh + 1 >= target, which is quite weird, but the
-	// reason why I need to put 902 as *that* makes 1000 - 902 +1 = 99 >=
-	// 100 false
-	c2.BlockHeight = int32(902)
-	if pool.isCreditEligible(c2, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
+	_, credits = TstCreateCreditsOnNewSeries(t, pool, []int64{int64(dustThreshold)})
+	c = credits[0].(*credit)
+	// The calculation of if it has been confirmed does this: chainheigt - bh +
+	// 1 >= target, which is quite weird, but the reason why I need to put 902
+	// is *that* makes 1000 - 902 +1 = 99 >= 100 false
+	c.Credit.BlockMeta.Height = int32(902)
+	if pool.isCreditEligible(c, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
 		t.Errorf("Input is eligible and it should not be.")
 	}
 }
@@ -331,9 +313,10 @@ type TstFakeCredit struct {
 func (c *TstFakeCredit) String() string             { return "" }
 func (c *TstFakeCredit) TxSha() *wire.ShaHash       { return c.txSha }
 func (c *TstFakeCredit) OutputIndex() uint32        { return c.outputIndex }
+func (c *TstFakeCredit) BlockHeight() int32         { return -1 }
 func (c *TstFakeCredit) Address() WithdrawalAddress { return c.addr }
 func (c *TstFakeCredit) Amount() btcutil.Amount     { return c.amount }
-func (c *TstFakeCredit) TxOut() *wire.TxOut         { return nil }
+func (c *TstFakeCredit) PkScript() []byte           { return []byte{} }
 func (c *TstFakeCredit) OutPoint() *wire.OutPoint {
 	return &wire.OutPoint{Hash: *c.txSha, Index: c.outputIndex}
 }
