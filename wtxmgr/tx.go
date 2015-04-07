@@ -19,7 +19,6 @@ package wtxmgr
 import (
 	"bytes"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/btcsuite/btcd/blockchain"
@@ -764,53 +763,6 @@ func (s *Store) unspentOutputs(ns walletdb.Bucket) ([]Credit, error) {
 		return nil, storeError(ErrDatabase, str, err)
 	}
 
-	return unspent, nil
-}
-
-type creditSlice []Credit
-
-func (s creditSlice) Len() int {
-	return len(s)
-}
-
-func (s creditSlice) Less(i, j int) bool {
-	switch {
-	// If both credits are from the same tx, sort by output index.
-	case s[i].OutPoint.Hash == s[j].OutPoint.Hash:
-		return s[i].OutPoint.Index < s[j].OutPoint.Index
-
-	// If both transactions are unmined, sort by their received date.
-	case s[i].Height == -1 && s[j].Height == -1:
-		return s[i].Received.Before(s[j].Received)
-
-	// Unmined (newer) txs always come last.
-	case s[i].Height == -1:
-		return false
-	case s[j].Height == -1:
-		return true
-
-	// If both txs are mined in different blocks, sort by block height.
-	default:
-		return s[i].Height < s[j].Height
-	}
-}
-
-func (s creditSlice) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-// SortedUnspentOutputs returns all unspent recevied transaction outputs.
-// The order is first unmined transactions (sorted by receive date), then
-// mined transactions in increasing number of confirmations.  Transactions
-// in the same block (same number of confirmations) are sorted by block
-// index in increasing order.  Credits (outputs) from the same transaction
-// are sorted by output index in increasing order.
-func (s *Store) SortedUnspentOutputs() ([]Credit, error) {
-	unspent, err := s.UnspentOutputs()
-	if err != nil {
-		return nil, err
-	}
-	sort.Sort(sort.Reverse(creditSlice(unspent)))
 	return unspent, nil
 }
 
