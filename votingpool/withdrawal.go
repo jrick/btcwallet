@@ -22,12 +22,13 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcwallet/legacy/txstore"
 	"github.com/btcsuite/btcwallet/waddrmgr"
+	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/btcsuite/fastsha256"
 )
 
@@ -429,7 +430,7 @@ func newWithdrawal(roundID uint32, requests []OutputRequest, inputs []Credit,
 // found at http://opentransactions.org/wiki/index.php/Startwithdrawal
 func (p *Pool) StartWithdrawal(roundID uint32, requests []OutputRequest,
 	startAddress WithdrawalAddress, lastSeriesID uint32, changeStart ChangeAddress,
-	txStore *txstore.Store, chainHeight int32, dustThreshold btcutil.Amount) (
+	txStore *wtxmgr.Store, chainHeight int32, dustThreshold btcutil.Amount) (
 	*WithdrawalStatus, error) {
 
 	eligible, err := p.getEligibleInputs(txStore, startAddress, lastSeriesID, dustThreshold,
@@ -769,10 +770,19 @@ func getRawSigs(transactions []*withdrawalTx) (map[Ntxid]TxSigs, error) {
 // manager) the redeem script for each of them and constructing the signature
 // script using that and the given raw signatures.
 // This function must be called with the manager unlocked.
-func SignTx(msgtx *wire.MsgTx, sigs TxSigs, mgr *waddrmgr.Manager, store *txstore.Store) error {
-	credits, err := store.FindPreviousCredits(btcutil.NewTx(msgtx))
-	for i, credit := range credits {
-		if err = signMultiSigUTXO(mgr, msgtx, i, credit.TxOut().PkScript, sigs[i]); err != nil {
+func SignTx(msgtx *wire.MsgTx, sigs TxSigs, mgr *waddrmgr.Manager, store *wtxmgr.Store) error {
+	// We use time.Now() here as we're not going to store the new TxRecord
+	// anywhere -- we just need it to pass to store.PreviousPkScripts().
+	rec, err := wtxmgr.NewTxRecordFromMsgTx(msgtx, time.Now())
+	if err != nil {
+		return newError(ErrTxSigning, "failed to construct TxRecord for signing", err)
+	}
+	pkScripts, err := store.PreviousPkScripts(rec, nil)
+	if err != nil {
+		return newError(ErrTxSigning, "failed to obtain pkScripts for signing", err)
+	}
+	for i, pkScript := range pkScripts {
+		if err = signMultiSigUTXO(mgr, msgtx, i, pkScript, sigs[i]); err != nil {
 			return err
 		}
 	}
