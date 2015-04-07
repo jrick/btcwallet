@@ -788,25 +788,25 @@ func confirms(txHeight, curHeight int32) int32 {
 // transaction outputs) given a minimum of minConf confirmations, calculated
 // at a current chain height of curHeight.  Coinbase outputs are only included
 // in the balance if maturity has been reached.
-func (s *Store) Balance(minConf, chainHeight int32) (btcutil.Amount, error) {
+func (s *Store) Balance(minConf, syncHeight int32) (btcutil.Amount, error) {
 	var amt btcutil.Amount
 	err := scopedView(s.namespace, func(ns walletdb.Bucket) error {
 		var err error
-		amt, err = s.balance(ns, minConf, chainHeight)
+		amt, err = s.balance(ns, minConf, syncHeight)
 		return err
 	})
 	return amt, err
 }
 
-func (s *Store) balance(ns walletdb.Bucket, minConf int32, chainHeight int32) (btcutil.Amount, error) {
+func (s *Store) balance(ns walletdb.Bucket, minConf int32, syncHeight int32) (btcutil.Amount, error) {
 	bal, err := fetchMinedBalance(ns)
 	if err != nil {
 		return 0, err
 	}
 
 	// Shadow this to avoid repeating arguments unnecesarily.
-	confirms := func(height int32) int32 {
-		return confirms(height, chainHeight)
+	confirms := func(txHeight int32) int32 {
+		return confirms(txHeight, syncHeight)
 	}
 
 	// Subtract the balance for each credit that is spent by an unmined
@@ -846,7 +846,7 @@ func (s *Store) balance(ns walletdb.Bucket, minConf int32, chainHeight int32) (b
 	if blockchain.CoinbaseMaturity > stopConf {
 		stopConf = blockchain.CoinbaseMaturity
 	}
-	lastHeight := chainHeight - stopConf
+	lastHeight := syncHeight - stopConf
 	blockIt := makeReverseBlockIterator(ns)
 	for blockIt.prev() {
 		block := &blockIt.elem
@@ -882,7 +882,9 @@ func (s *Store) balance(ns walletdb.Bucket, minConf int32, chainHeight int32) (b
 				if spent {
 					continue
 				}
-				if confirms(block.Height) < minConf || blockchain.IsCoinBaseTx(&rec.MsgTx) {
+				confs := confirms(block.Height)
+				if confs < minConf || (blockchain.IsCoinBaseTx(&rec.MsgTx) &&
+					confs <= blockchain.CoinbaseMaturity) {
 					bal -= amt
 				}
 			}
