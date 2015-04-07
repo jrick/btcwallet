@@ -1360,6 +1360,7 @@ func (s *Store) PreviousPkScripts(rec *TxRecord, block *Block) ([][]byte, error)
 					pkScripts = append(pkScripts, pkScript)
 				}
 			}
+			return nil
 		}
 
 		recKey := keyTxRecord(&rec.Hash, block)
