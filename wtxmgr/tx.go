@@ -804,28 +804,13 @@ func (s *Store) unspentOutputs(ns walletdb.Bucket) ([]Credit, error) {
 	return unspent, nil
 }
 
-// confirmed checks whether a transaction at height txHeight has met
-// minconf confirmations for a blockchain at height curHeight.
-func confirmed(minconf, txHeight, curHeight int32) bool {
-	return confirms(txHeight, curHeight) >= minconf
-}
-
-// confirms returns the number of confirmations for a transaction in a
-// block at height txHeight (or -1 for an unconfirmed tx) given the chain
-// height curHeight.
-func confirms(txHeight, curHeight int32) int32 {
-	switch {
-	case txHeight == -1, txHeight > curHeight:
-		return 0
-	default:
-		return curHeight - txHeight + 1
-	}
-}
-
 // Balance returns the spendable wallet balance (total value of all unspent
 // transaction outputs) given a minimum of minConf confirmations, calculated
 // at a current chain height of curHeight.  Coinbase outputs are only included
 // in the balance if maturity has been reached.
+//
+// Balance may return unexpected results if syncHeight is lower than the block
+// height of the most recent mined transaction in the store.
 func (s *Store) Balance(minConf, syncHeight int32) (btcutil.Amount, error) {
 	var amt btcutil.Amount
 	err := scopedView(s.namespace, func(ns walletdb.Bucket) error {
@@ -840,11 +825,6 @@ func (s *Store) balance(ns walletdb.Bucket, minConf int32, syncHeight int32) (bt
 	bal, err := fetchMinedBalance(ns)
 	if err != nil {
 		return 0, err
-	}
-
-	// Shadow this to avoid repeating arguments unnecesarily.
-	confirms := func(txHeight int32) int32 {
-		return confirms(txHeight, syncHeight)
 	}
 
 	// Subtract the balance for each credit that is spent by an unmined
@@ -920,7 +900,7 @@ func (s *Store) balance(ns walletdb.Bucket, minConf int32, syncHeight int32) (bt
 				if spent {
 					continue
 				}
-				confs := confirms(block.Height)
+				confs := syncHeight - block.Height + 1
 				if confs < minConf || (blockchain.IsCoinBaseTx(&rec.MsgTx) &&
 					confs < blockchain.CoinbaseMaturity) {
 					bal -= amt
