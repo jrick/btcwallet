@@ -40,17 +40,20 @@ import (
 //   ck: The current cursor key
 //   cv: The current cursor value
 //
-// Functions use the naming scheme `Op[Raw]Type`, which performs the
-// operation `Op` on the type `Type`, optionally dealing with raw keys
-// and values if `Raw` is used.  The following operations are used:
+// Functions use the naming scheme `Op[Raw]Type[Field]`, which performs the
+// operation `Op` on the type `Type`, optionally dealing with raw keys and
+// values if `Raw` is used.  Fetch and extract operations may only need read
+// some portion of a key or value, in which case `Field` describes the component
+// being returned.  The following operations are used:
 //
-//   key:    return a db key for some data
-//   value:  return a db value for some data
-//   put:    insert or replace a value into a bucket
-//   fetch:  read and return a value
-//   read:   read a value into an out parameter
-//   exists: return the raw (nil if not found) value for some data
-//   delete: remove a k/v pair
+//   key:     return a db key for some data
+//   value:   return a db value for some data
+//   put:     insert or replace a value into a bucket
+//   fetch:   read and return a value
+//   read:    read a value into an out parameter
+//   exists:  return the raw (nil if not found) value for some data
+//   delete:  remove a k/v pair
+//   extract: perform an unchecked slice to extract a key or value
 //
 // Other operations which are specific to the types being operated on
 // should be explained in a comment.
@@ -453,6 +456,22 @@ func fetchTxRecord(ns walletdb.Bucket, txHash *wire.ShaHash, block *Block) (*TxR
 	return rec, err
 }
 
+// TODO: This reads more than necessary.  Pass the pkscript location instead to
+// avoid the wire.MsgTx deserialization.
+func fetchRawTxRecordPkScript(k, v []byte, index uint32) ([]byte, error) {
+	var rec TxRecord
+	copy(rec.Hash[:], k) // Silly but need an array
+	err := readRawTxRecord(&rec.Hash, v, &rec)
+	if err != nil {
+		return nil, err
+	}
+	if int(index) >= len(rec.MsgTx.TxOut) {
+		str := "missing transaction output for credit index"
+		return nil, storeError(ErrData, str, nil)
+	}
+	return rec.MsgTx.TxOut[index].PkScript, nil
+}
+
 func existsTxRecord(ns walletdb.Bucket, txHash *wire.ShaHash, block *Block) (k, v []byte) {
 	k = keyTxRecord(txHash, block)
 	v = ns.Bucket(bucketTxRecords).Get(k)
@@ -549,6 +568,14 @@ func putCredit(ns walletdb.Bucket, cred *credit) error {
 	k := keyCredit(&cred.outPoint.Hash, cred.outPoint.Index, &cred.block)
 	v := valueCredit(cred)
 	return putRawCredit(ns, k, v)
+}
+
+func extractRawCreditTxRecordKey(k []byte) []byte {
+	return k[0:68]
+}
+
+func extractRawCreditIndex(k []byte) uint32 {
+	return byteOrder.Uint32(k[68:72])
 }
 
 // fetchRawCreditAmount returns the amount of the credit.
@@ -848,6 +875,10 @@ func putDebit(ns walletdb.Bucket, txHash *wire.ShaHash, index uint32, amount btc
 		return storeError(ErrDatabase, str, err)
 	}
 	return nil
+}
+
+func extractRawDebitCreditKey(v []byte) []byte {
+	return v[8:80]
 }
 
 // existsDebit checks for the existance of a debit.  If found, the debit and
