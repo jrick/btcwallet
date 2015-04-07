@@ -249,15 +249,6 @@ func readRawBlockRecord(k, v []byte, block *blockRecord) error {
 	return nil
 }
 
-func fetchBlockRecord(ns walletdb.Bucket, height int32) (*blockRecord, error) {
-	k := make([]byte, 4)
-	byteOrder.PutUint32(k, uint32(height))
-	v := ns.Bucket(bucketBlocks).Get(k)
-	block := new(blockRecord)
-	err := readRawBlockRecord(k, v, block)
-	return block, err
-}
-
 type blockIterator struct {
 	c    walletdb.Cursor
 	seek []byte
