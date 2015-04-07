@@ -1323,3 +1323,59 @@ func (s *Store) rangeBlockTransactions(ns walletdb.Bucket, begin, end int32, f f
 	}
 	return false, blockIter.err
 }
+
+// PreviousPkScripts returns a slice of previous output scripts for each output
+// this transaction record debits from.
+func (s *Store) PreviousPkScripts(rec *TxRecord, block *Block) ([][]byte, error) {
+	var pkScripts [][]byte
+	err := scopedView(s.namespace, func(ns walletdb.Bucket) error {
+		if block == nil {
+			for _, input := range rec.MsgTx.TxIn {
+				prevOut := &input.PreviousOutPoint
+
+				// Input may spend a previous unmined output, a
+				// mined output (which would still be marked
+				// unspent), or neither.
+
+				v := existsRawUnmined(ns, prevOut.Hash[:])
+				if v != nil {
+					pkScript, err := fetchRawTxRecordPkScript(
+						prevOut.Hash[:], v, prevOut.Index)
+					if err != nil {
+						return err
+					}
+					pkScripts = append(pkScripts, pkScript)
+					continue
+				}
+
+				_, credKey := existsUnspent(ns, prevOut)
+				if credKey != nil {
+					k := extractRawCreditTxRecordKey(credKey)
+					v = existsRawTxRecord(ns, k)
+					pkScript, err := fetchRawTxRecordPkScript(k, v,
+						prevOut.Index)
+					if err != nil {
+						return err
+					}
+					pkScripts = append(pkScripts, pkScript)
+				}
+			}
+		}
+
+		recKey := keyTxRecord(&rec.Hash, block)
+		it := makeDebitIterator(ns, recKey)
+		for it.next() {
+			credKey := extractRawDebitCreditKey(it.cv)
+			index := extractRawCreditIndex(credKey)
+			k := extractRawCreditTxRecordKey(credKey)
+			v := existsRawTxRecord(ns, k)
+			pkScript, err := fetchRawTxRecordPkScript(k, v, index)
+			if err != nil {
+				return err
+			}
+			pkScripts = append(pkScripts, pkScript)
+		}
+		return it.err
+	})
+	return pkScripts, err
+}
