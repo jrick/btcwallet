@@ -329,7 +329,7 @@ func (s *Store) insertMinedTx(ns walletdb.Bucket, rec *TxRecord, block *BlockMet
 		err = putBlockRecord(ns, block, &rec.Hash)
 	} else {
 		blockValue, err = appendRawBlockRecord(blockValue, &rec.Hash)
-		if err == nil {
+		if err != nil {
 			return err
 		}
 		err = putRawBlockRecord(ns, blockKey, blockValue)

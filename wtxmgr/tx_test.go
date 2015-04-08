@@ -873,7 +873,7 @@ func TestCoinbases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = s.AddCredit(spenderARec, &bMaturity, 0, false)
+	err = s.AddCredit(spenderBRec, &bMaturity, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
