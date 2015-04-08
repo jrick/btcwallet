@@ -1,4 +1,4 @@
-// Copyright (c) 2013, 2015 Conformal Systems LLC <info@conformal.com>
+// Copyright (c) 2013-2015 Conformal Systems LLC <info@conformal.com>
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -21,12 +21,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/walletdb"
 	_ "github.com/btcsuite/btcwallet/walletdb/bdb"
 	. "github.com/btcsuite/btcwallet/wtxmgr"
+	"github.com/davecgh/go-spew/spew"
 )
 
 // Received transaction output for mainnet outpoint
@@ -64,8 +66,7 @@ func CreateTestStore() (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := Open(wtxmgrNamespace,
-		&chaincfg.MainNetParams)
+	s, err := Open(wtxmgrNamespace, &chaincfg.MainNetParams)
 	if err != nil {
 		return nil, err
 	}
@@ -538,5 +539,428 @@ func TestFindingSpentCredits(t *testing.T) {
 	}
 	if len(unspents) > 1 {
 		t.Fatal("has more than one unspent credit")
+	}
+}
+
+func newCoinBase(outputValues ...int64) *wire.MsgTx {
+	tx := wire.MsgTx{
+		TxIn: []*wire.TxIn{
+			&wire.TxIn{
+				PreviousOutPoint: wire.OutPoint{Index: ^uint32(0)},
+			},
+		},
+	}
+	for _, val := range outputValues {
+		tx.TxOut = append(tx.TxOut, &wire.TxOut{Value: val})
+	}
+	return &tx
+}
+
+func spentOutput(txHash *wire.ShaHash, index uint32, outputValues ...int64) *wire.MsgTx {
+	tx := wire.MsgTx{
+		TxIn: []*wire.TxIn{
+			&wire.TxIn{
+				PreviousOutPoint: wire.OutPoint{Hash: *txHash, Index: index},
+			},
+		},
+	}
+	for _, val := range outputValues {
+		tx.TxOut = append(tx.TxOut, &wire.TxOut{Value: val})
+	}
+	return &tx
+}
+
+func TestCoinbases(t *testing.T) {
+	s, err := CreateTestStore()
+	defer os.Remove(TstDbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b100 := BlockMeta{
+		Block: Block{Height: 100},
+		Time:  time.Now(),
+	}
+
+	cb := newCoinBase(20e8, 10e8, 30e8)
+	cbRec, err := NewTxRecordFromMsgTx(cb, b100.Time)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert coinbase and mark outputs 0 and 2 as credits.
+	err = s.InsertTx(cbRec, &b100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(cbRec, &b100, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(cbRec, &b100, 2, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Balance should be 0 if the coinbase is immature, 50 BTC at and beyond
+	// maturity.
+	//
+	// Outputs when depth is below maturity are never included, no matter
+	// the required number of confirmations.  Matured outputs which have
+	// greater depth than minConf are still excluded.
+	type balTest struct {
+		height  int32
+		minConf int32
+		bal     btcutil.Amount
+	}
+	balTests := []balTest{
+		// Next block it is still immature
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 2,
+			minConf: 0,
+			bal:     0,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 2,
+			minConf: blockchain.CoinbaseMaturity,
+			bal:     0,
+		},
+
+		// Next block it matures
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: 0,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: 1,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: blockchain.CoinbaseMaturity - 1,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: blockchain.CoinbaseMaturity,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: blockchain.CoinbaseMaturity + 1,
+			bal:     0,
+		},
+
+		// Matures at this block
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: 0,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: 1,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: blockchain.CoinbaseMaturity,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: blockchain.CoinbaseMaturity + 1,
+			bal:     50e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: blockchain.CoinbaseMaturity + 2,
+			bal:     0,
+		},
+	}
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks after inserting coinbase")
+	}
+
+	// Spend an output from the coinbase tx in an unmined transaction when
+	// the next block will mature the coinbase.
+	spenderATime := time.Now()
+	spenderA := spentOutput(&cbRec.Hash, 0, 5e8, 15e8)
+	spenderARec, err := NewTxRecordFromMsgTx(spenderA, spenderATime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.InsertTx(spenderARec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(spenderARec, nil, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	balTests = []balTest{
+		// Next block it matures
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: 0,
+			bal:     35e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: 1,
+			bal:     30e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: blockchain.CoinbaseMaturity,
+			bal:     30e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity - 1,
+			minConf: blockchain.CoinbaseMaturity + 1,
+			bal:     0,
+		},
+
+		// Matures at this block
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: 0,
+			bal:     35e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: 1,
+			bal:     30e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: blockchain.CoinbaseMaturity,
+			bal:     30e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: blockchain.CoinbaseMaturity + 1,
+			bal:     30e8,
+		},
+		{
+			height:  b100.Height + blockchain.CoinbaseMaturity,
+			minConf: blockchain.CoinbaseMaturity + 2,
+			bal:     0,
+		},
+	}
+	balTestsBeforeMaturity := balTests
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks after spending coinbase with unmined transaction")
+	}
+
+	// Mine the spending transaction in the block the coinbase matures.
+	bMaturity := BlockMeta{
+		Block: Block{Height: b100.Height + blockchain.CoinbaseMaturity},
+		Time:  time.Now(),
+	}
+	err = s.InsertTx(spenderARec, &bMaturity)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	balTests = []balTest{
+		// Maturity height
+		{
+			height:  bMaturity.Height,
+			minConf: 0,
+			bal:     35e8,
+		},
+		{
+			height:  bMaturity.Height,
+			minConf: 1,
+			bal:     35e8,
+		},
+		{
+			height:  bMaturity.Height,
+			minConf: 2,
+			bal:     30e8,
+		},
+		{
+			height:  bMaturity.Height,
+			minConf: blockchain.CoinbaseMaturity,
+			bal:     30e8,
+		},
+		{
+			height:  bMaturity.Height,
+			minConf: blockchain.CoinbaseMaturity + 1,
+			bal:     30e8,
+		},
+		{
+			height:  bMaturity.Height,
+			minConf: blockchain.CoinbaseMaturity + 2,
+			bal:     0,
+		},
+
+		// Next block after maturity height
+		{
+			height:  bMaturity.Height + 1,
+			minConf: 0,
+			bal:     35e8,
+		},
+		{
+			height:  bMaturity.Height + 1,
+			minConf: 2,
+			bal:     35e8,
+		},
+		{
+			height:  bMaturity.Height + 1,
+			minConf: 3,
+			bal:     30e8,
+		},
+		{
+			height:  bMaturity.Height + 1,
+			minConf: blockchain.CoinbaseMaturity + 2,
+			bal:     30e8,
+		},
+		{
+			height:  bMaturity.Height + 1,
+			minConf: blockchain.CoinbaseMaturity + 3,
+			bal:     0,
+		},
+	}
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks mining coinbase spending transaction")
+	}
+
+	// Create another spending transaction which spends the credit from the
+	// first spender.  This will be used to test removing the entire
+	// conflict chain when the coinbase is later reorged out.
+	//
+	// Use the same output amount as spender A and mark it as a credit.
+	// This will mean the balance tests should report identical results.
+	spenderBTime := time.Now()
+	spenderB := spentOutput(&spenderARec.Hash, 0, 5e8)
+	spenderBRec, err := NewTxRecordFromMsgTx(spenderB, spenderBTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.InsertTx(spenderBRec, &bMaturity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(spenderBRec, &bMaturity, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks mining second spending transaction")
+	}
+
+	// Reorg out the block that matured the coinbase and check balances
+	// again.
+	err = s.Rollback(bMaturity.Height)
+	if err != nil {
+		t.Fatal(err)
+	}
+	balTests = balTestsBeforeMaturity
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks after reorging maturity block")
+	}
+
+	// Reorg out the block which contained the coinbase.  There should be no
+	// more transactions in the store (since the previous outputs referenced
+	// by the spending tx no longer exist), and the balance will always be
+	// zero.
+	err = s.Rollback(b100.Height)
+	if err != nil {
+		t.Fatal(err)
+	}
+	balTests = []balTest{
+		// Current height
+		{
+			height:  b100.Height - 1,
+			minConf: 0,
+			bal:     0,
+		},
+		{
+			height:  b100.Height - 1,
+			minConf: 1,
+			bal:     0,
+		},
+
+		// Next height
+		{
+			height:  b100.Height,
+			minConf: 0,
+			bal:     0,
+		},
+		{
+			height:  b100.Height,
+			minConf: 1,
+			bal:     0,
+		},
+	}
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks after reorging coinbase block")
+	}
+	unminedTxs, err := s.UnminedTxs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unminedTxs) != 0 {
+		spew.Dump(unminedTxs)
+		t.Fatalf("Should have no unmined transactions after coinbase reorg, found %d", len(unminedTxs))
 	}
 }

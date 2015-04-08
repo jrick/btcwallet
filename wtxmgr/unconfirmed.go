@@ -106,8 +106,8 @@ func (s *Store) removeConflict(ns walletdb.Bucket, rec *TxRecord) error {
 				return err
 			}
 
-			log.Debugf("Transaction %v is part of a removed double "+
-				"spend chain -- removing as well", spender.Hash)
+			log.Debugf("Transaction %v is part of a removed conflict "+
+				"chain -- removing as well", spender.Hash)
 			err = s.removeConflict(ns, &spender)
 			if err != nil {
 				return err
