@@ -18,7 +18,6 @@ package wtxmgr
 
 import (
 	"bytes"
-	"fmt"
 	"time"
 
 	"github.com/btcsuite/btcd/blockchain"
@@ -496,11 +495,6 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 
 			recKey := keyTxRecord(txHash, &b.Block)
 			recVal := existsRawTxRecord(ns, recKey)
-			if recVal == nil {
-				str := fmt.Sprintf("missing transaction %v for "+
-					"block %v", txHash, b.Height)
-				return storeError(ErrData, str, nil)
-			}
 			var rec TxRecord
 			err = readRawTxRecord(txHash, recVal, &rec)
 			if err != nil {
@@ -770,10 +764,6 @@ func (s *Store) unspentOutputs(ns walletdb.Bucket) ([]Credit, error) {
 		// TODO(jrick): Reading/parsing the entire transaction record
 		// just for the output amount and script can be avoided.
 		recVal := existsRawUnmined(ns, op.Hash[:])
-		if recVal == nil {
-			str := "missing unmined transaction record"
-			return storeError(ErrData, str, nil)
-		}
 		var rec TxRecord
 		err = readRawTxRecord(&op.Hash, recVal, &rec)
 		if err != nil {
