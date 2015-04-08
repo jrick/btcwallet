@@ -481,7 +481,7 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 	//
 	// It is necessary to keep these in memory and fix the unmined
 	// transactions later since blocks are removed in increasing order.
-	var coinBaseCredits map[wire.OutPoint]struct{}
+	var coinBaseCredits []wire.OutPoint
 
 	it := makeBlockIterator(ns, height)
 	for it.next() {
@@ -522,10 +522,7 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 					}
 					op.Index = uint32(i)
 
-					if coinBaseCredits == nil {
-						coinBaseCredits = make(map[wire.OutPoint]struct{})
-					}
-					coinBaseCredits[op] = struct{}{}
+					coinBaseCredits = append(coinBaseCredits, op)
 
 					unspentKey, credKey := existsUnspent(ns, &op)
 					if credKey != nil {
@@ -659,7 +656,7 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 		return it.err
 	}
 
-	for op := range coinBaseCredits {
+	for _, op := range coinBaseCredits {
 		opKey := canonicalOutPoint(&op.Hash, op.Index)
 		unminedKey := existsRawUnminedInput(ns, opKey)
 		if unminedKey != nil {
