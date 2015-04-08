@@ -28,6 +28,7 @@ import (
 	"github.com/btcsuite/btcwallet/walletdb"
 	_ "github.com/btcsuite/btcwallet/walletdb/bdb"
 	. "github.com/btcsuite/btcwallet/wtxmgr"
+	"github.com/davecgh/go-spew/spew"
 )
 
 // Received transaction output for mainnet outpoint
@@ -694,17 +695,17 @@ func TestCoinbases(t *testing.T) {
 
 	// Spend an output from the coinbase tx in an unmined transaction when
 	// the next block will mature the coinbase.
-	spenderTime := time.Now()
-	spender := spentOutput(&cbRec.Hash, 0, 5e8, 15e8)
-	spenderRec, err := NewTxRecordFromMsgTx(spender, spenderTime)
+	spenderATime := time.Now()
+	spenderA := spentOutput(&cbRec.Hash, 0, 5e8, 15e8)
+	spenderARec, err := NewTxRecordFromMsgTx(spenderA, spenderATime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = s.InsertTx(spenderRec, nil)
+	err = s.InsertTx(spenderARec, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = s.AddCredit(spenderRec, nil, 0, false)
+	err = s.AddCredit(spenderARec, nil, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -778,7 +779,7 @@ func TestCoinbases(t *testing.T) {
 		Block: Block{Height: b100.Height + blockchain.CoinbaseMaturity},
 		Time:  time.Now(),
 	}
-	err = s.InsertTx(spenderRec, &bMaturity)
+	err = s.InsertTx(spenderARec, &bMaturity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,6 +857,39 @@ func TestCoinbases(t *testing.T) {
 		t.Fatal("Failed balance checks mining coinbase spending transaction")
 	}
 
+	// Create another spending transaction which spends the credit from the
+	// first spender.  This will be used to test removing the entire
+	// conflict chain when the coinbase is later reorged out.
+	//
+	// Use the same output amount as spender A and mark it as a credit.
+	// This will mean the balance tests should report identical results.
+	spenderBTime := time.Now()
+	spenderB := spentOutput(&spenderARec.Hash, 0, 5e8)
+	spenderBRec, err := NewTxRecordFromMsgTx(spenderB, spenderBTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.InsertTx(spenderBRec, &bMaturity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.AddCredit(spenderARec, &bMaturity, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tst := range balTests {
+		bal, err := s.Balance(tst.minConf, tst.height)
+		if err != nil {
+			t.Fatalf("Balance test %d: Store.Balance failed: %v", i, err)
+		}
+		if bal != tst.bal {
+			t.Errorf("Balance test %d: Got %v Expected %v", i, bal, tst.bal)
+		}
+	}
+	if t.Failed() {
+		t.Fatal("Failed balance checks mining second spending transaction")
+	}
+
 	// Reorg out the block that matured the coinbase and check balances
 	// again.
 	err = s.Rollback(bMaturity.Height)
@@ -920,5 +954,13 @@ func TestCoinbases(t *testing.T) {
 	}
 	if t.Failed() {
 		t.Fatal("Failed balance checks after reorging coinbase block")
+	}
+	unminedTxs, err := s.UnminedTxs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unminedTxs) != 0 {
+		spew.Dump(unminedTxs)
+		t.Fatalf("Should have no unmined transactions after coinbase reorg, found %d", len(unminedTxs))
 	}
 }

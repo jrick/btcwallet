@@ -511,10 +511,6 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 			if err != nil {
 				return err
 			}
-			err = putRawUnmined(ns, txHash[:], recVal)
-			if err != nil {
-				return err
-			}
 
 			// Handle coinbase transactions specially since they are
 			// not moved to the unconfirmed store.  A coinbase cannot
@@ -552,6 +548,11 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 				}
 
 				continue
+			}
+
+			err = putRawUnmined(ns, txHash[:], recVal)
+			if err != nil {
+				return err
 			}
 
 			// For each debit recorded for this transaction, mark
