@@ -510,8 +510,6 @@ func (s *Store) rollback(ns walletdb.Bucket, height int32) error {
 			// not moved to the unconfirmed store.  A coinbase cannot
 			// contain any debits, but all credits should be removed
 			// and the mined balance decremented.
-			//
-			//
 			if blockchain.IsCoinBaseTx(&rec.MsgTx) {
 				op := wire.OutPoint{Hash: rec.Hash}
 				for i, output := range rec.MsgTx.TxOut {
