@@ -406,7 +406,7 @@ func (s *Store) insertMinedTx(ns walletdb.Bucket, rec *TxRecord, block *BlockMet
 // that are known to contain credits when a transaction or merkleblock is
 // inserted into the store.
 func (s *Store) AddCredit(rec *TxRecord, block *BlockMeta, index uint32, change bool) error {
-	if len(rec.MsgTx.TxOut) <= int(index) {
+	if int(index) >= len(rec.MsgTx.TxOut) {
 		str := "transaction output does not exist"
 		return storeError(ErrInput, str, nil)
 	}
