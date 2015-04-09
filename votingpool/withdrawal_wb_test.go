@@ -138,7 +138,7 @@ func TestSplitLastOutputNoOutputs(t *testing.T) {
 	tearDown, pool, _ := TstCreatePoolAndTxStore(t)
 	defer tearDown()
 
-	w := newWithdrawal(0, []OutputRequest{}, []Credit{}, ChangeAddress{})
+	w := newWithdrawal(0, []OutputRequest{}, []credit{}, ChangeAddress{})
 	w.current = createWithdrawalTx(t, pool, []int64{}, []int64{})
 
 	err := w.splitLastOutput()
@@ -173,7 +173,7 @@ func TestWithdrawalTxOutputs(t *testing.T) {
 	tx := w.transactions[0]
 	// The created tx should include both eligible credits, so we expect it to have
 	// an input amount of 2e6+4e6 satoshis.
-	inputAmount := eligible[0].Amount() + eligible[1].Amount()
+	inputAmount := eligible[0].Amount + eligible[1].Amount
 	change := inputAmount - (outputs[0].Amount + outputs[1].Amount + calculateTxFee(tx))
 	expectedOutputs := append(
 		outputs, TstNewOutputRequest(t, 3, changeStart.addr.String(), change, net))
@@ -239,7 +239,7 @@ func TestFulfillRequestsNotEnoughCreditsForAllRequests(t *testing.T) {
 	tx := w.transactions[0]
 	// The created tx should spend both eligible credits, so we expect it to have
 	// an input amount of 2e6+4e6 satoshis.
-	inputAmount := eligible[0].Amount() + eligible[1].Amount()
+	inputAmount := eligible[0].Amount + eligible[1].Amount
 	// We expect it to include outputs for requests 1 and 2, plus a change output, but
 	// output request #3 should not be there because we don't have enough credits.
 	change := inputAmount - (out1.Amount + out2.Amount + calculateTxFee(tx))
@@ -291,7 +291,7 @@ func TestRollbackLastOutput(t *testing.T) {
 		t.Fatalf("Unexpected number of inputs removed; got %d, want 1", len(removedInputs))
 	}
 	lastInput := initialInputs[len(initialInputs)-1]
-	if removedInputs[0] != lastInput {
+	if !reflect.DeepEqual(removedInputs[0], lastInput) {
 		t.Fatalf("Wrong rolled back input; got %s want %s", removedInputs[0], lastInput)
 	}
 
@@ -322,8 +322,8 @@ func TestRollbackLastOutputMultipleInputsRolledBack(t *testing.T) {
 		t.Fatalf("Unexpected number of inputs removed; got %d, want 3", len(removedInputs))
 	}
 	for i, amount := range []btcutil.Amount{4, 3, 2} {
-		if removedInputs[i].Amount() != amount {
-			t.Fatalf("Unexpected input amount; got %v, want %v", removedInputs[i].Amount(), amount)
+		if removedInputs[i].Amount != amount {
+			t.Fatalf("Unexpected input amount; got %v, want %v", removedInputs[i].Amount, amount)
 		}
 	}
 
@@ -529,13 +529,13 @@ func TestWithdrawalTxRemoveInput(t *testing.T) {
 	gotRemovedInput := tx.removeInput()
 
 	// Check the popped input looks correct.
-	if gotRemovedInput != wantRemovedInput {
+	if !reflect.DeepEqual(gotRemovedInput, wantRemovedInput) {
 		t.Fatalf("Popped input wrong; got %v, want %v", gotRemovedInput, wantRemovedInput)
 	}
 	checkTxInputs(t, tx, inputs[0:1])
 
 	// Make sure that the remaining input is really the right one.
-	if tx.inputs[0] != remainingInput {
+	if !reflect.DeepEqual(tx.inputs[0], remainingInput) {
 		t.Fatalf("Wrong input: got %v, want %v", tx.inputs[0], remainingInput)
 	}
 }
@@ -674,7 +674,7 @@ func TestSignMultiSigUTXO(t *testing.T) {
 	txSigs := sigs[tx.ntxid()]
 
 	idx := 0 // The index of the tx input we're going to sign.
-	pkScript := tx.inputs[idx].PkScript()
+	pkScript := tx.inputs[idx].PkScript
 	TstRunWithManagerUnlocked(t, mgr, func() {
 		if err = signMultiSigUTXO(mgr, msgtx, idx, pkScript, txSigs[idx]); err != nil {
 			t.Fatal(err)
@@ -746,9 +746,9 @@ func TestSignMultiSigUTXONotEnoughSigs(t *testing.T) {
 
 	idx := 0 // The index of the tx input we're going to sign.
 	// Here we provide reqSigs-1 signatures to SignMultiSigUTXO()
-	reqSigs := tx.inputs[idx].Address().series().TstGetReqSigs()
+	reqSigs := tx.inputs[idx].addr.series().TstGetReqSigs()
 	txInSigs := txSigs[idx][:reqSigs-1]
-	pkScript := tx.inputs[idx].PkScript()
+	pkScript := tx.inputs[idx].PkScript
 	TstRunWithManagerUnlocked(t, mgr, func() {
 		err = signMultiSigUTXO(mgr, msgtx, idx, pkScript, txInSigs)
 	})
@@ -765,7 +765,7 @@ func TestSignMultiSigUTXOWrongRawSigs(t *testing.T) {
 	sigs := []RawSig{RawSig{0x00}, RawSig{0x01}}
 
 	idx := 0 // The index of the tx input we're going to sign.
-	pkScript := tx.inputs[idx].PkScript()
+	pkScript := tx.inputs[idx].PkScript
 	var err error
 	TstRunWithManagerUnlocked(t, mgr, func() {
 		err = signMultiSigUTXO(mgr, tx.toMsgTx(), idx, pkScript, sigs)
@@ -790,7 +790,7 @@ func TestGetRawSigs(t *testing.T) {
 		t.Fatalf("Unexpected number of sig lists; got %d, want %d", len(txSigs), len(tx.inputs))
 	}
 
-	checkNonEmptySigsForPrivKeys(t, txSigs, tx.inputs[0].Address().series().privateKeys)
+	checkNonEmptySigsForPrivKeys(t, txSigs, tx.inputs[0].addr.series().privateKeys)
 
 	// Since we have all the necessary signatures (m-of-n), we construct the
 	// sigsnature scripts and execute them to make sure the raw signatures are
@@ -804,7 +804,7 @@ func TestGetRawSigsOnlyOnePrivKeyAvailable(t *testing.T) {
 
 	tx := createWithdrawalTx(t, pool, []int64{5e6, 4e6}, []int64{})
 	// Remove all private keys but the first one from the credit's series.
-	series := tx.inputs[0].Address().series()
+	series := tx.inputs[0].addr.series()
 	for i := range series.privateKeys[1:] {
 		series.privateKeys[i] = nil
 	}
@@ -829,7 +829,7 @@ func TestGetRawSigsUnparseableRedeemScript(t *testing.T) {
 	tx := createWithdrawalTx(t, pool, []int64{5e6, 4e6}, []int64{})
 	// Change the redeem script for one of our tx inputs, to force an error in
 	// getRawSigs().
-	tx.inputs[0].Address().script = []byte{0x01}
+	tx.inputs[0].addr.script = []byte{0x01}
 
 	_, err := getRawSigs([]*withdrawalTx{tx})
 
@@ -843,7 +843,7 @@ func TestGetRawSigsInvalidAddrBranch(t *testing.T) {
 	tx := createWithdrawalTx(t, pool, []int64{5e6, 4e6}, []int64{})
 	// Change the branch of our input's address to an invalid value, to force
 	// an error in getRawSigs().
-	tx.inputs[0].Address().branch = Branch(999)
+	tx.inputs[0].addr.branch = Branch(999)
 
 	_, err := getRawSigs([]*withdrawalTx{tx})
 
@@ -911,7 +911,7 @@ func TestTxSizeCalculation(t *testing.T) {
 	// output.
 	restoreCalcTxFee := replaceCalculateTxFee(TstConstantFee(1))
 	defer restoreCalcTxFee()
-	seriesID := tx.inputs[0].Address().SeriesID()
+	seriesID := tx.inputs[0].addr.SeriesID()
 	tx.addChange(TstNewChangeAddress(t, pool, seriesID, 0).addr.ScriptAddress())
 	msgtx := tx.toMsgTx()
 	sigs, err := getRawSigs([]*withdrawalTx{tx})
@@ -924,7 +924,7 @@ func TestTxSizeCalculation(t *testing.T) {
 	// calculateTxSize() we use a dummy signature for the worst-case scenario (73
 	// bytes) so the estimate here can be up to 2 bytes bigger for every
 	// signature in every input's SigScript.
-	maxDiff := 2 * len(msgtx.TxIn) * int(tx.inputs[0].Address().series().reqSigs)
+	maxDiff := 2 * len(msgtx.TxIn) * int(tx.inputs[0].addr.series().reqSigs)
 	// To make things worse, there's a possibility that the length of the
 	// actual SignatureScript is at the upper boundary of one of the uint*
 	// types, and when that happens our dummy SignatureScript is likely to have
@@ -1032,12 +1032,12 @@ func checkMsgTxOutputs(t *testing.T, msgtx *wire.MsgTx, requests []OutputRequest
 }
 
 // checkTxInputs ensures that the tx.inputs match the given inputs.
-func checkTxInputs(t *testing.T, tx *withdrawalTx, inputs []Credit) {
+func checkTxInputs(t *testing.T, tx *withdrawalTx, inputs []credit) {
 	if len(tx.inputs) != len(inputs) {
 		t.Fatalf("Wrong number of inputs in tx; got %d, want %d", len(tx.inputs), len(inputs))
 	}
 	for i, input := range tx.inputs {
-		if input != inputs[i] {
+		if !reflect.DeepEqual(input, inputs[i]) {
 			t.Fatalf("Unexpected input; got %s, want %s", input, inputs[i])
 		}
 	}
@@ -1047,9 +1047,9 @@ func checkTxInputs(t *testing.T, tx *withdrawalTx, inputs []Credit) {
 // transaction (using the given raw signatures and the pkScripts from credits) and execute
 // those scripts to validate them.
 func signTxAndValidate(t *testing.T, mgr *waddrmgr.Manager, tx *wire.MsgTx, txSigs TxSigs,
-	credits []Credit) {
+	credits []credit) {
 	for i := range tx.TxIn {
-		pkScript := credits[i].PkScript()
+		pkScript := credits[i].PkScript
 		TstRunWithManagerUnlocked(t, mgr, func() {
 			if err := signMultiSigUTXO(mgr, tx, i, pkScript, txSigs[i]); err != nil {
 				t.Fatal(err)
@@ -1064,9 +1064,9 @@ func compareMsgTxAndWithdrawalTxInputs(t *testing.T, msgtx *wire.MsgTx, tx *with
 	}
 
 	for i, txin := range msgtx.TxIn {
-		outpoint := tx.inputs[i].OutPoint()
-		if txin.PreviousOutPoint != *outpoint {
-			t.Fatalf("Wrong outpoint; got %v expected %v", txin.PreviousOutPoint, *outpoint)
+		outpoint := tx.inputs[i].OutPoint
+		if txin.PreviousOutPoint != outpoint {
+			t.Fatalf("Wrong outpoint; got %v expected %v", txin.PreviousOutPoint, outpoint)
 		}
 	}
 }

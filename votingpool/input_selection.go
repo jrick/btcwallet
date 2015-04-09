@@ -23,74 +23,30 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/wtxmgr"
 )
 
 const eligibleInputMinConfirmations = 100
 
-// Credit is an abstraction over wtxmgr.Credit used in the construction of
+// credit is an abstraction over wtxmgr.Credit used in the construction of
 // voting pool withdrawal transactions.
-type Credit interface {
-	TxSha() *wire.ShaHash
-	OutputIndex() uint32
-	Address() WithdrawalAddress
-	Amount() btcutil.Amount
-	OutPoint() *wire.OutPoint
-	PkScript() []byte
-	BlockHeight() int32
-}
-
-// credit implements the Credit interface.
 type credit struct {
 	wtxmgr.Credit
 	addr WithdrawalAddress
 }
 
-func newCredit(c wtxmgr.Credit, addr WithdrawalAddress) *credit {
-	return &credit{Credit: c, addr: addr}
-}
-
-func (c *credit) BlockHeight() int32 {
-	return c.Credit.BlockMeta.Height
-}
-
-func (c *credit) Amount() btcutil.Amount {
-	return c.Credit.Amount
-}
-
-func (c *credit) OutPoint() *wire.OutPoint {
-	return &c.Credit.OutPoint
-}
-
-// TxSha returns the sha hash of the underlying transaction.
-func (c *credit) TxSha() *wire.ShaHash {
-	return &c.Credit.OutPoint.Hash
-}
-
-func (c *credit) PkScript() []byte {
-	return c.Credit.PkScript
-}
-
-// OutputIndex returns the outputindex of the ouput in the underlying
-// transaction.
-func (c *credit) OutputIndex() uint32 {
-	return c.Credit.OutPoint.Index
-}
-
-// Address returns the voting pool address.
-func (c *credit) Address() WithdrawalAddress {
-	return c.addr
+func newCredit(c wtxmgr.Credit, addr WithdrawalAddress) credit {
+	return credit{Credit: c, addr: addr}
 }
 
 func (c *credit) String() string {
-	return fmt.Sprintf("credit of %v to %v", c.Amount(), c.Address())
+	return fmt.Sprintf("credit of %v locked to %v", c.Amount, c.addr)
 }
 
 // byAddress defines the methods needed to satisify sort.Interface to sort a
-// slice of Credits by their address.
-type byAddress []Credit
+// slice of credits by their address.
+type byAddress []credit
 
 func (c byAddress) Len() int      { return len(c) }
 func (c byAddress) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
@@ -100,8 +56,8 @@ func (c byAddress) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
 // the lexicographic ordering defined on the tuple (SeriesID, Index,
 // Branch, TxSha, OutputIndex).
 func (c byAddress) Less(i, j int) bool {
-	iAddr := c[i].Address()
-	jAddr := c[j].Address()
+	iAddr := c[i].addr
+	jAddr := c[j].addr
 	if iAddr.seriesID < jAddr.seriesID {
 		return true
 	}
@@ -126,7 +82,7 @@ func (c byAddress) Less(i, j int) bool {
 	}
 
 	// The seriesID, index, and branch are equal, so compare hash.
-	txidComparison := bytes.Compare(c[i].TxSha().Bytes(), c[j].TxSha().Bytes())
+	txidComparison := bytes.Compare(c[i].OutPoint.Hash.Bytes(), c[j].OutPoint.Hash.Bytes())
 	if txidComparison < 0 {
 		return true
 	}
@@ -136,14 +92,14 @@ func (c byAddress) Less(i, j int) bool {
 
 	// The seriesID, index, branch, and hash are equal, so compare output
 	// index.
-	return c[i].OutputIndex() < c[j].OutputIndex()
+	return c[i].OutPoint.Index < c[j].OutPoint.Index
 }
 
 // getEligibleInputs returns eligible inputs with addresses between startAddress
 // and the last used address of lastSeriesID.
 func (p *Pool) getEligibleInputs(store *wtxmgr.Store, startAddress WithdrawalAddress,
 	lastSeriesID uint32, dustThreshold btcutil.Amount, chainHeight int32,
-	minConf int) ([]Credit, error) {
+	minConf int) ([]credit, error) {
 
 	if p.Series(lastSeriesID) == nil {
 		str := fmt.Sprintf("lastSeriesID (%d) does not exist", lastSeriesID)
@@ -157,12 +113,12 @@ func (p *Pool) getEligibleInputs(store *wtxmgr.Store, startAddress WithdrawalAdd
 	if err != nil {
 		return nil, err
 	}
-	var inputs []Credit
+	var inputs []credit
 	address := startAddress
 	for {
 		log.Debugf("Looking for eligible inputs at address %v", address.addrIdentifier())
 		if candidates, ok := addrMap[address.addr.EncodeAddress()]; ok {
-			var eligibles []Credit
+			var eligibles []credit
 			for _, c := range candidates {
 				candidate := newCredit(c, address)
 				if p.isCreditEligible(candidate, minConf, chainHeight, dustThreshold) {
@@ -280,12 +236,12 @@ func groupCreditsByAddr(credits []wtxmgr.Credit, chainParams *chaincfg.Params) (
 // isCreditEligible tests a given credit for eligibilty with respect
 // to number of confirmations, the dust threshold and that it is not
 // the charter output.
-func (p *Pool) isCreditEligible(c Credit, minConf int, chainHeight int32,
+func (p *Pool) isCreditEligible(c credit, minConf int, chainHeight int32,
 	dustThreshold btcutil.Amount) bool {
-	if c.Amount() < dustThreshold {
+	if c.Amount < dustThreshold {
 		return false
 	}
-	if confirms(c.BlockHeight(), chainHeight) < int32(minConf) {
+	if confirms(c.BlockMeta.Block.Height, chainHeight) < int32(minConf) {
 		return false
 	}
 	if p.isCharterOutput(c) {
@@ -297,7 +253,7 @@ func (p *Pool) isCreditEligible(c Credit, minConf int, chainHeight int32,
 
 // isCharterOutput - TODO: In order to determine this, we need the txid
 // and the output index of the current charter output, which we don't have yet.
-func (p *Pool) isCharterOutput(c Credit) bool {
+func (p *Pool) isCharterOutput(c credit) bool {
 	return false
 }
 

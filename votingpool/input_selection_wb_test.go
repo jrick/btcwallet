@@ -57,7 +57,7 @@ func TestGetEligibleInputs(t *testing.T) {
 	startAddr := TstNewWithdrawalAddress(t, pool, 1, 0, 0)
 	lastSeriesID := uint32(2)
 	currentBlock := int32(TstInputsBlock + eligibleInputMinConfirmations + 1)
-	var eligibles []Credit
+	var eligibles []credit
 	var err error
 	TstRunWithManagerUnlocked(t, pool.Manager(), func() {
 		eligibles, err = pool.getEligibleInputs(
@@ -217,9 +217,9 @@ func TestEligibleInputsAreEligible(t *testing.T) {
 
 	var chainHeight int32 = 1000
 	_, credits := TstCreateCreditsOnNewSeries(t, pool, []int64{int64(dustThreshold)})
-	c := credits[0].(*credit)
+	c := credits[0]
 	// Make sure credit is old enough to pass the minConf check.
-	c.Credit.BlockMeta.Height = int32(eligibleInputMinConfirmations)
+	c.BlockMeta.Height = int32(eligibleInputMinConfirmations)
 
 	if !pool.isCreditEligible(c, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
 		t.Errorf("Input is not eligible and it should be.")
@@ -232,9 +232,9 @@ func TestNonEligibleInputsAreNotEligible(t *testing.T) {
 
 	var chainHeight int32 = 1000
 	_, credits := TstCreateCreditsOnNewSeries(t, pool, []int64{int64(dustThreshold - 1)})
-	c := credits[0].(*credit)
+	c := credits[0]
 	// Make sure credit is old enough to pass the minConf check.
-	c.Credit.BlockMeta.Height = int32(eligibleInputMinConfirmations)
+	c.BlockMeta.Height = int32(eligibleInputMinConfirmations)
 
 	// Check that credit below dustThreshold is rejected.
 	if pool.isCreditEligible(c, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
@@ -243,11 +243,11 @@ func TestNonEligibleInputsAreNotEligible(t *testing.T) {
 
 	// Check that a credit with not enough confirmations is rejected.
 	_, credits = TstCreateCreditsOnNewSeries(t, pool, []int64{int64(dustThreshold)})
-	c = credits[0].(*credit)
+	c = credits[0]
 	// The calculation of if it has been confirmed does this: chainheigt - bh +
 	// 1 >= target, which is quite weird, but the reason why I need to put 902
 	// is *that* makes 1000 - 902 +1 = 99 >= 100 false
-	c.Credit.BlockMeta.Height = int32(902)
+	c.BlockMeta.Height = int32(902)
 	if pool.isCreditEligible(c, eligibleInputMinConfirmations, chainHeight, dustThreshold) {
 		t.Errorf("Input is eligible and it should not be.")
 	}
@@ -266,21 +266,21 @@ func TestCreditSortingByAddress(t *testing.T) {
 	shaHash0 := bytes.Repeat([]byte{0}, 32)
 	shaHash1 := bytes.Repeat([]byte{1}, 32)
 	shaHash2 := bytes.Repeat([]byte{2}, 32)
-	c0 := TstNewFakeCredit(t, pool, 1, 0, 0, shaHash0, 0)
-	c1 := TstNewFakeCredit(t, pool, 1, 0, 0, shaHash0, 1)
-	c2 := TstNewFakeCredit(t, pool, 1, 0, 0, shaHash1, 0)
-	c3 := TstNewFakeCredit(t, pool, 1, 0, 0, shaHash2, 0)
-	c4 := TstNewFakeCredit(t, pool, 1, 0, 1, shaHash0, 0)
-	c5 := TstNewFakeCredit(t, pool, 1, 1, 0, shaHash0, 0)
-	c6 := TstNewFakeCredit(t, pool, 2, 0, 0, shaHash0, 0)
+	c0 := newDummyCredit(t, pool, 1, 0, 0, shaHash0, 0)
+	c1 := newDummyCredit(t, pool, 1, 0, 0, shaHash0, 1)
+	c2 := newDummyCredit(t, pool, 1, 0, 0, shaHash1, 0)
+	c3 := newDummyCredit(t, pool, 1, 0, 0, shaHash2, 0)
+	c4 := newDummyCredit(t, pool, 1, 0, 1, shaHash0, 0)
+	c5 := newDummyCredit(t, pool, 1, 1, 0, shaHash0, 0)
+	c6 := newDummyCredit(t, pool, 2, 0, 0, shaHash0, 0)
 
-	randomCredits := [][]Credit{
-		[]Credit{c6, c5, c4, c3, c2, c1, c0},
-		[]Credit{c2, c1, c0, c6, c5, c4, c3},
-		[]Credit{c6, c4, c5, c2, c3, c0, c1},
+	randomCredits := [][]credit{
+		[]credit{c6, c5, c4, c3, c2, c1, c0},
+		[]credit{c2, c1, c0, c6, c5, c4, c3},
+		[]credit{c6, c4, c5, c2, c3, c0, c1},
 	}
 
-	want := []Credit{c0, c1, c2, c3, c4, c5, c6}
+	want := []credit{c0, c1, c2, c3, c4, c5, c6}
 
 	for _, random := range randomCredits {
 		sort.Sort(byAddress(random))
@@ -300,29 +300,11 @@ func TestCreditSortingByAddress(t *testing.T) {
 	}
 }
 
-// TstFakeCredit is a structure implementing the Credit interface used to test
-// the byAddress sorting. It exists because to test the sorting properly we need
-// to be able to set the Credit's TxSha and OutputIndex.
-type TstFakeCredit struct {
-	addr        WithdrawalAddress
-	txSha       *wire.ShaHash
-	outputIndex uint32
-	amount      btcutil.Amount
-}
-
-func (c *TstFakeCredit) String() string             { return "" }
-func (c *TstFakeCredit) TxSha() *wire.ShaHash       { return c.txSha }
-func (c *TstFakeCredit) OutputIndex() uint32        { return c.outputIndex }
-func (c *TstFakeCredit) BlockHeight() int32         { return -1 }
-func (c *TstFakeCredit) Address() WithdrawalAddress { return c.addr }
-func (c *TstFakeCredit) Amount() btcutil.Amount     { return c.amount }
-func (c *TstFakeCredit) PkScript() []byte           { return []byte{} }
-func (c *TstFakeCredit) OutPoint() *wire.OutPoint {
-	return &wire.OutPoint{Hash: *c.txSha, Index: c.outputIndex}
-}
-
-func TstNewFakeCredit(t *testing.T, pool *Pool, series uint32, index Index, branch Branch,
-	txSha []byte, outputIdx int) *TstFakeCredit {
+// newDummyCredit creates a new credit with the given hash and outpointIdx,
+// locked to the votingpool address identified by the given
+// series/index/branch.
+func newDummyCredit(t *testing.T, pool *Pool, series uint32, index Index, branch Branch,
+	txSha []byte, outpointIdx uint32) credit {
 	var hash wire.ShaHash
 	if err := hash.SetBytes(txSha); err != nil {
 		t.Fatal(err)
@@ -331,16 +313,14 @@ func TstNewFakeCredit(t *testing.T, pool *Pool, series uint32, index Index, bran
 	// the set of used addresses as that's a requirement of WithdrawalAddress.
 	TstEnsureUsedAddr(t, pool, series, branch, index)
 	addr := TstNewWithdrawalAddress(t, pool, series, branch, index)
-	return &TstFakeCredit{
-		addr:        *addr,
-		txSha:       &hash,
-		outputIndex: uint32(outputIdx),
+	c := wtxmgr.Credit{
+		OutPoint: wire.OutPoint{
+			Hash:  hash,
+			Index: outpointIdx,
+		},
 	}
+	return newCredit(c, *addr)
 }
-
-// Compile time check that TstFakeCredit implements the
-// Credit interface.
-var _ Credit = (*TstFakeCredit)(nil)
 
 func checkUniqueness(t *testing.T, credits byAddress) {
 	type uniq struct {
@@ -354,11 +334,11 @@ func checkUniqueness(t *testing.T, credits byAddress) {
 	uniqMap := make(map[uniq]bool)
 	for _, c := range credits {
 		u := uniq{
-			series:      c.Address().SeriesID(),
-			branch:      c.Address().Branch(),
-			index:       c.Address().Index(),
-			hash:        *c.TxSha(),
-			outputIndex: c.OutputIndex(),
+			series:      c.addr.SeriesID(),
+			branch:      c.addr.Branch(),
+			index:       c.addr.Index(),
+			hash:        c.OutPoint.Hash,
+			outputIndex: c.OutPoint.Index,
 		}
 		if _, exists := uniqMap[u]; exists {
 			t.Fatalf("Duplicate found: %v", u)

@@ -231,7 +231,7 @@ func TstCreatePoolAndTxStore(t *testing.T) (tearDown func(), pool *Pool, store *
 // slice of credits locked to the series' address with branch==1 and index==0.
 // The new Series will use a 2-of-3 configuration and will be empowered with
 // all of its private keys.
-func TstCreateCreditsOnNewSeries(t *testing.T, pool *Pool, amounts []int64) (uint32, []Credit) {
+func TstCreateCreditsOnNewSeries(t *testing.T, pool *Pool, amounts []int64) (uint32, []credit) {
 	masters := []*hdkeychain.ExtendedKey{
 		TstCreateMasterKey(t, bytes.Repeat(uint32ToBytes(getUniqueID()), 4)),
 		TstCreateMasterKey(t, bytes.Repeat(uint32ToBytes(getUniqueID()), 4)),
@@ -242,9 +242,9 @@ func TstCreateCreditsOnNewSeries(t *testing.T, pool *Pool, amounts []int64) (uin
 	return def.SeriesID, TstCreateSeriesCredits(t, pool, def.SeriesID, amounts)
 }
 
-// TstCreateSeriesCredits creates a new Credit for every item in the amounts
+// TstCreateSeriesCredits creates a new credit for every item in the amounts
 // slice, locked to the given series' address with branch==1 and index==0.
-func TstCreateSeriesCredits(t *testing.T, pool *Pool, seriesID uint32, amounts []int64) []Credit {
+func TstCreateSeriesCredits(t *testing.T, pool *Pool, seriesID uint32, amounts []int64) []credit {
 	addr := TstNewWithdrawalAddress(t, pool, seriesID, Branch(1), Index(0))
 	pkScript, err := txscript.PayToAddrScript(addr.addr)
 	if err != nil {
@@ -255,7 +255,7 @@ func TstCreateSeriesCredits(t *testing.T, pool *Pool, seriesID uint32, amounts [
 	if err != nil {
 		t.Fatal(err)
 	}
-	credits := make([]Credit, len(amounts))
+	credits := make([]credit, len(amounts))
 	for i := range msgTx.TxOut {
 		c := wtxmgr.Credit{
 			OutPoint: wire.OutPoint{
@@ -277,11 +277,11 @@ func TstCreateSeriesCredits(t *testing.T, pool *Pool, seriesID uint32, amounts [
 // every item in the amounts slice. These credits are locked to the votingpool
 // address composed of the given seriesID, branch==1 and index==0.
 func TstCreateSeriesCreditsOnStore(t *testing.T, pool *Pool, seriesID uint32, amounts []int64,
-	store *wtxmgr.Store) []Credit {
+	store *wtxmgr.Store) []credit {
 	branch := Branch(1)
 	idx := Index(0)
 	pkScript := TstCreatePkScript(t, pool, seriesID, branch, idx)
-	eligible := make([]Credit, len(amounts))
+	eligible := make([]credit, len(amounts))
 	for i, credit := range TstCreateCreditsOnStore(t, store, pkScript, amounts) {
 		eligible[i] = newCredit(credit, *TstNewWithdrawalAddress(t, pool, seriesID, branch, idx))
 	}
