@@ -3228,6 +3228,10 @@ func (s *Store) MakeIgnoredInputSource(ns, addrmgrNs walletdb.ReadBucket, accoun
 				}
 
 				scriptSize = txsizes.RedeemP2PKHSigScriptSize
+			case txscript.ScriptHashTy:
+				// TODO: hack -- don't error on p2sh even though we
+				// don't know what the spending requirements are for
+				// fee/size estimation.
 			default:
 				log.Errorf("unexpected script class for credit: %v",
 					scriptClass)
