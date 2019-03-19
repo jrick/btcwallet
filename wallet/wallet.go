@@ -1128,6 +1128,8 @@ func (w *Wallet) PurchaseTickets(ctx context.Context, minBalance, spendLimit dcr
 		poolFees:    poolFees,
 		txFee:       txFee,
 		ticketFee:   ticketFee,
+
+		ChangeAccount: account,
 	}
 
 	heldUnlock, err := w.holdUnlock()
@@ -1146,6 +1148,7 @@ type PurchaseTicketsRequest struct {
 	VotingAddress dcrutil.Address
 	MinConf       int32
 	Expiry        int32
+	VotingAccount uint32 // Used when VotingAddress == nil, or CSPPServer != ""
 
 	// may be set by deprecated methods, subject to change
 	minBalance  dcrutil.Amount
@@ -1154,6 +1157,14 @@ type PurchaseTicketsRequest struct {
 	poolFees    float64
 	txFee       dcrutil.Amount
 	ticketFee   dcrutil.Amount
+
+	// Mixed split buying through CoinShuffle++
+	CSPPServer         string
+	DialCSPPServer     DialFunc
+	MixedAccount       uint32
+	MixedAccountBranch uint32
+	MixedSplitAccount  uint32
+	ChangeAccount      uint32
 }
 
 // PurchaseTicketsContext purchases tickets, returning the hashes of all ticket
@@ -3772,7 +3783,7 @@ func (w *Wallet) TotalReceivedForAddr(addr dcrutil.Address, minConf int32) (dcru
 
 // SendOutputs creates and sends payment transactions. It returns the
 // transaction hash upon success
-func (w *Wallet) SendOutputs(ctx context.Context, outputs []*wire.TxOut, account uint32, minconf int32) (*chainhash.Hash, error) {
+func (w *Wallet) SendOutputs(ctx context.Context, outputs []*wire.TxOut, account, changeAccount uint32, minconf int32) (*chainhash.Hash, error) {
 	const op errors.Op = "wallet.SendOutputs"
 	relayFee := w.RelayFee()
 	for _, output := range outputs {
@@ -3787,7 +3798,7 @@ func (w *Wallet) SendOutputs(ctx context.Context, outputs []*wire.TxOut, account
 		return nil, err
 	}
 	defer heldUnlock.release()
-	tx, err := w.txToOutputs(ctx, "wallet.SendOutputs", outputs, account, minconf, true)
+	tx, err := w.txToOutputs(ctx, "wallet.SendOutputs", outputs, account, changeAccount, minconf, true)
 	if err != nil {
 		return nil, err
 	}
