@@ -93,6 +93,9 @@ type Notifications struct {
 	RescanStarted                func()
 	RescanProgress               func(rescannedThrough int32)
 	RescanFinished               func()
+	NewMempoolTxs                func(txs []*wire.MsgTx) // hashes would probably be better
+	//NewMainChainTip func(hash *chainhash.Hash)
+	//NewMinedTx func(txHash, blockHash *chainhash.Hash)
 }
 
 // NewSyncer creates a Syncer that will sync the wallet using SPV.
@@ -216,6 +219,12 @@ func (s *Syncer) rescanProgress(rescannedThrough int32) {
 func (s *Syncer) rescanFinished() {
 	if s.notifications != nil && s.notifications.RescanFinished != nil {
 		s.notifications.RescanFinished()
+	}
+}
+
+func (s *Syncer) newMempoolTxs(txs []*wire.MsgTx) {
+	if s.notifications != nil && s.notifications.NewMempoolTxs != nil {
+		s.notifications.NewMempoolTxs(txs)
 	}
 }
 
@@ -688,13 +697,15 @@ func (s *Syncer) handleTxInvs(ctx context.Context, rp *p2p.RemotePeer, hashes []
 	}
 
 	// Save any relevant transaction.
-	for _, tx := range s.filterRelevant(txs) {
+	relevant := s.filterRelevant(txs)
+	for _, tx := range relevant {
 		err := s.wallet.AcceptMempoolTx(tx)
 		if err != nil {
 			op := errors.Opf(opf, rp.RemoteAddr())
 			log.Warn(errors.E(op, err))
 		}
 	}
+	s.newMempoolTxs(relevant)
 }
 
 // receiveHeaderAnnouncements receives all block announcements through pushed
