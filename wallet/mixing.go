@@ -198,7 +198,7 @@ func (w *Wallet) MixAccount(ctx context.Context, dialTLS DialFunc, csppserver st
 	defer hold.release()
 
 	_, tipHeight := w.MainChainTip()
-	credits, err := w.FindEligibleOutputs(changeAccount, 0, tipHeight)
+	credits, err := w.FindEligibleOutputs(changeAccount, 1, tipHeight)
 	if err != nil {
 		return errors.E(op, err)
 	}
