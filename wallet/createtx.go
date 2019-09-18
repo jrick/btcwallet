@@ -1219,7 +1219,8 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op, n NetworkBac
 		return nil, err
 	}
 	for _, in := range atx.Tx.TxIn {
-		log.Infof("selected input %v", in.PreviousOutPoint)
+		log.Infof("selected input %v (%v) for ticket purchase split transaction",
+			in.PreviousOutPoint, dcrutil.Amount(in.ValueIn))
 	}
 
 	var change *wire.TxOut
@@ -1256,6 +1257,8 @@ func (w *Wallet) purchaseTickets(ctx context.Context, op errors.Op, n NetworkBac
 		return nil, err
 	}
 	splitTx := cj.tx
+	splitTxHash := splitTx.TxHash()
+	log.Infof("Completed CoinShuffle++ mix of ticket split transaction %v", &splitTxHash)
 	rec, err := udb.NewTxRecordFromMsgTx(splitTx, time.Now())
 	if err != nil {
 		return nil, err

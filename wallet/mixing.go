@@ -45,6 +45,8 @@ func init() {
 	}
 }
 
+var errNoSplitDenomination = errors.New("no suitable split denomination")
+
 // DialFunc provides a method to dial a network connection.
 // If the dialed network connection is secured by TLS, TLS
 // configuration is provided by the method, not the caller.
@@ -93,8 +95,12 @@ func (w *Wallet) MixOutput(ctx context.Context, dialTLS DialFunc, csppserver str
 		if count > 0 {
 			remValue = amount - dcrutil.Amount(count)*v
 			mixValue = v
-			splitSems[i] <- struct{}{}
-			defer func() { <-splitSems[i] }()
+			select {
+			case <-ctx.Done():
+				return errors.E(op, ctx.Err())
+			case splitSems[i] <- struct{}{}:
+				defer func() { <-splitSems[i] }()
+			}
 			break
 		}
 	}
@@ -102,8 +108,8 @@ func (w *Wallet) MixOutput(ctx context.Context, dialTLS DialFunc, csppserver str
 		remValue = 0
 	}
 	if mixValue == 0 {
-		return nil
-		//return errors.E(op, "no split denomination")
+		err := errors.Errorf("output %v (%v): %w", output, amount, errNoSplitDenomination)
+		return errors.E(op, err)
 	}
 
 	// Create change output from remaining value and contributed fee
@@ -131,6 +137,7 @@ func (w *Wallet) MixOutput(ctx context.Context, dialTLS DialFunc, csppserver str
 		}
 	}
 
+	log.Infof("Mixing output %v (%v)", output, amount)
 	cj := w.newCsppJoin(change, mixValue, mixAccount, mixBranch, int(count))
 	cj.addTxIn(prevScript, &wire.TxIn{
 		PreviousOutPoint: *output,
@@ -161,6 +168,8 @@ func (w *Wallet) MixOutput(ctx context.Context, dialTLS DialFunc, csppserver str
 	if err != nil {
 		return errors.E(op, err)
 	}
+	cjHash := cj.tx.TxHash()
+	log.Infof("Completed CoinShuffle++ mix of output %v in transaction %v", output, &cjHash)
 
 	err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
 		for _, f := range updates {
@@ -206,9 +215,16 @@ func (w *Wallet) MixAccount(ctx context.Context, dialTLS DialFunc, csppserver st
 
 	g, ctx := errgroup.WithContext(ctx)
 	for i := range credits {
+		if credits[i].Amount <= splitPoints[len(splitPoints)-1] {
+			continue
+		}
 		op := &credits[i].OutPoint
 		g.Go(func() error {
-			return w.MixOutput(ctx, dialTLS, csppserver, op, changeAccount, mixAccount, mixBranch)
+			err := w.MixOutput(ctx, dialTLS, csppserver, op, changeAccount, mixAccount, mixBranch)
+			if errors.Is(err, errNoSplitDenomination) {
+				return nil
+			}
+			return err
 		})
 	}
 	err = g.Wait()
