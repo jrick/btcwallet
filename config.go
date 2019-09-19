@@ -616,6 +616,29 @@ func loadConfig(ctx context.Context) (*config, []string, error) {
 		}
 	}
 
+	ipNet := func(cidr string) net.IPNet {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(err)
+		}
+		return *ipNet
+	}
+	privNets := []net.IPNet{
+		// IPv4 loopback
+		ipNet("127.0.0.0/8"),
+
+		// IPv6 loopback
+		ipNet("::1/128"),
+
+		// RFC 1918
+		ipNet("10.0.0.0/8"),
+		ipNet("172.16.0.0/12"),
+		ipNet("192.168.0.0/16"),
+
+		// RFC 4193
+		ipNet("fc00::/7"),
+	}
+
 	// Set dialer and DNS lookup functions if proxy settings are provided.
 	if cfg.Proxy != "" {
 		proxy := &socks.Proxy{
@@ -624,7 +647,22 @@ func loadConfig(ctx context.Context) (*config, []string, error) {
 			Password:     cfg.ProxyPass,
 			TorIsolation: cfg.TorIsolation,
 		}
-		cfg.dial = proxy.DialContext
+		var noproxyDialer net.Dialer
+		cfg.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				host = address
+			}
+			ip := net.ParseIP(host)
+			if len(ip) == 4 || len(ip) == 16 {
+				for i := range privNets {
+					if privNets[i].Contains(ip) {
+						return noproxyDialer.DialContext(ctx, network, address)
+					}
+				}
+			}
+			return proxy.DialContext(ctx, network, address)
+		}
 		cfg.lookup = func(host string) ([]net.IP, error) {
 			return connmgr.TorLookupIP(host, cfg.Proxy)
 		}
