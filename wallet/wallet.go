@@ -390,6 +390,8 @@ func (w *Wallet) syncWithChain() error {
 		break
 	}
 	if rollback {
+		log.Infof("would have rolled back to %v (%d), but this functionality is removed", syncBlock.Hash, syncBlock.Height)
+		/*
 		err = w.Manager.SetSyncedTo(&syncBlock)
 		if err != nil {
 			return err
@@ -401,6 +403,7 @@ func (w *Wallet) syncWithChain() error {
 		if err != nil {
 			return err
 		}
+		*/
 	}
 
 	return w.Rescan(addrs, unspent)
