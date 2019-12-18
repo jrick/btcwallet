@@ -381,6 +381,7 @@ func (w *Wallet) syncWithChain() error {
 			bs.Height, bs.Hash)
 		_, err = chainClient.GetBlock(&bs.Hash)
 		if err != nil {
+			log.Errorf("getblock(%v): %v", &bs.Hash, err)
 			rollback = true
 			continue
 		}
