@@ -320,9 +320,11 @@ func (m *Manager) lock() {
 
 	// Remove clear text private keys from all address entries.
 	m.returnedSecretsMu.Lock()
+	/* TODO: zero keys
 	for _, privKey := range m.returnedPrivKeys {
 		zeroBigInt(privKey.D)
 	}
+	*/
 	m.returnedPrivKeys = nil
 	m.returnedSecretsMu.Unlock()
 
@@ -836,14 +838,7 @@ func (m *Manager) importedAddressRowToManaged(row *dbImportedAddressRow) (Manage
 		return nil, errors.E(errors.Crypto, errors.Errorf("decrypt imported pubkey: %v", err))
 	}
 
-	pubKey, err := secp256k1.ParsePubKey(pubBytes)
-	if err != nil {
-		return nil, errors.E(errors.IO, err)
-	}
-
-	compressed := len(pubBytes) == secp256k1.PubKeyBytesLenCompressed
-	ma, err := newManagedAddressWithoutPrivKey(m, row.account, pubKey,
-		compressed)
+	ma, err := newManagedAddressWithoutPrivKey(m, row.account, pubBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -1107,9 +1102,11 @@ func (m *Manager) ConvertToWatchingOnly(ns walletdb.ReadWriteBucket) error {
 
 	// Clear and remove encrypted private keys from all address entries.
 	m.returnedSecretsMu.Lock()
+	/* TODO: zero keys
 	for _, privKey := range m.returnedPrivKeys {
 		zeroBigInt(privKey.D)
 	}
+	*/
 	m.returnedPrivKeys = nil
 	m.returnedSecretsMu.Unlock()
 
@@ -1193,12 +1190,8 @@ func (m *Manager) ImportPrivateKey(ns walletdb.ReadWriteBucket, wif *dcrutil.WIF
 	}
 
 	// Create a new managed address based on the imported address.
-	pub, err := secp256k1.ParsePubKey(serializedPubKey)
-	if err != nil {
-		return nil, err
-	}
 	managedAddr, err := newManagedAddressWithoutPrivKey(m, ImportedAddrAccount,
-		pub, true)
+		serializedPubKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1931,13 +1924,12 @@ func (m *Manager) PrivateKey(ns walletdb.ReadBucket, addr dcrutil.Address) (key 
 		if err != nil {
 			return nil, nil, err
 		}
-		key, err = xpriv.ECPrivKey()
-		// hdkeychain.ExtendedKey.ECPrivKey creates a copy of the private key,
-		// and therefore the extended private key should be zeroed.
-		xpriv.Zero()
+		serializedPriv, err := xpriv.SerializedPrivKey()
 		if err != nil {
 			return nil, nil, err
 		}
+		key = secp256k1.PrivKeyFromBytes(serializedPriv)
+		zero(serializedPriv)
 
 	case *dbImportedAddressRow:
 		privKeyBytes, err := m.cryptoKeyPriv.Decrypt(a.encryptedPrivKey)
@@ -2066,15 +2058,15 @@ func newManager(chainParams *chaincfg.Params, masterKeyPub *snacl.SecretKey,
 	cryptoKeyPrivEncrypted []byte, privPassphraseSalt [saltSize]byte) *Manager {
 
 	return &Manager{
-		chainParams:              chainParams,
-		locked:                   true,
-		acctInfo:                 make(map[uint32]*accountInfo),
-		masterKeyPub:             masterKeyPub,
-		masterKeyPriv:            masterKeyPriv,
-		cryptoKeyPub:             cryptoKeyPub,
-		cryptoKeyPrivEncrypted:   cryptoKeyPrivEncrypted,
-		cryptoKeyPriv:            &cryptoKey{},
-		privPassphraseSalt:       privPassphraseSalt,
+		chainParams:            chainParams,
+		locked:                 true,
+		acctInfo:               make(map[uint32]*accountInfo),
+		masterKeyPub:           masterKeyPub,
+		masterKeyPriv:          masterKeyPriv,
+		cryptoKeyPub:           cryptoKeyPub,
+		cryptoKeyPrivEncrypted: cryptoKeyPrivEncrypted,
+		cryptoKeyPriv:          &cryptoKey{},
+		privPassphraseSalt:     privPassphraseSalt,
 	}
 }
 
@@ -2210,7 +2202,7 @@ func loadManager(ns walletdb.ReadBucket, pubPassphrase []byte, chainParams *chai
 	// the defaults for the additional fields which are not specified in the
 	// call to new with the values loaded from the database.
 	mgr := newManager(chainParams, &masterKeyPub, &masterKeyPriv,
-		cryptoKeyPub, cryptoKeyPrivEnc,	privPassphraseSalt)
+		cryptoKeyPub, cryptoKeyPrivEnc, privPassphraseSalt)
 	mgr.watchingOnly = watchingOnly
 	return mgr, nil
 }
